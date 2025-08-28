@@ -53,9 +53,11 @@ jobs:
           KAFKA_VERSION="3.9.0"
           echo "kafka_version=${KAFKA_VERSION}" >> $GITHUB_OUTPUT
           
-          # 验证GitHub Release是否存在
-          RELEASE_URL="https://github.com/AutoMQ/automq/releases/download/${TAG}/automq-${TAG}_kafka-${KAFKA_VERSION}.tgz"
+          # TODO: 测试用URL，后期需要改回 AutoMQ/automq
+          # 验证GitHub Release是否存在（使用fork仓库进行测试）
+          RELEASE_URL="https://github.com/Rancho-7/automq/releases/download/${TAG}/automq-${TAG}_kafka-${KAFKA_VERSION}.tgz"
           echo "Checking release URL: ${RELEASE_URL}"
+          echo "⚠️  注意：当前使用测试仓库URL，生产环境需要改回 AutoMQ/automq"
           
           if curl --head --silent --fail "${RELEASE_URL}" > /dev/null 2>&1; then
             echo "release_exists=true" >> $GITHUB_OUTPUT
@@ -188,7 +190,7 @@ jobs:
           KAFKA_VERSION="${{ steps.release_info.outputs.kafka_version }}"
           IMAGE_TAG="${AUTOMQ_VERSION}-strimzi-kafka-${KAFKA_VERSION}"
           
-          echo "tags=${{ secrets.DOCKERHUB_USERNAME }}/automq:${IMAGE_TAG}" >> $GITHUB_OUTPUT
+          echo "tags=${{ secrets.DOCKERHUB_USERNAME }}/automq-test:${IMAGE_TAG}" >> $GITHUB_OUTPUT
           echo "Generated image tag: ${IMAGE_TAG}"
       - name: Push AutoMQ Strimzi Image
         run: |
