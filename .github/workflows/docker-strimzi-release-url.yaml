@@ -58,7 +58,7 @@ jobs:
           RELEASE_URL="https://github.com/Rancho-7/automq/releases/download/${TAG}/automq-${TAG}_kafka-${KAFKA_VERSION}.tgz"
           echo "Checking release URL: ${RELEASE_URL}"
           echo "⚠️  注意：当前使用测试仓库URL，生产环境需要改回 AutoMQ/automq"
-          
+                
           if curl --head --silent --fail "${RELEASE_URL}" > /dev/null 2>&1; then
             echo "release_exists=true" >> $GITHUB_OUTPUT
             echo "✅ Confirmed release exists: ${RELEASE_URL}"
@@ -75,41 +75,6 @@ jobs:
           java-version: ${{ matrix.jdk }}
           distribution: "zulu"
 
-      - name: Setup Gradle
-        uses: gradle/gradle-build-action@v2.12.0
-
-      - name: Get project version
-        id: get_project_version
-        run: |
-          project_version=$(./gradlew properties | grep "version:" | awk '{print $2}')
-          echo "PROJECT_VERSION=${project_version}" >> $GITHUB_OUTPUT
-          echo "✅ 获取到实际项目版本: ${project_version}"
-
-      - name: Update release URL with actual version
-        id: update_release_info
-        run: |
-          TAG="${{ steps.release_info.outputs.tag }}"
-          ACTUAL_VERSION="${{ steps.get_project_version.outputs.PROJECT_VERSION }}"
-          
-          echo "tag=${TAG}" >> $GITHUB_OUTPUT
-          echo "kafka_version=${ACTUAL_VERSION}" >> $GITHUB_OUTPUT
-          
-          # TODO: 测试用URL，后期需要改回 AutoMQ/automq
-          # 使用实际的项目版本（包含SNAPSHOT）
-          RELEASE_URL="https://github.com/Rancho-7/automq/releases/download/${TAG}/automq-${TAG}_kafka-${ACTUAL_VERSION}.tgz"
-          echo "Checking updated release URL: ${RELEASE_URL}"
-          echo "⚠️  注意：当前使用测试仓库URL，生产环境需要改回 AutoMQ/automq"
-          
-          if curl --head --silent --fail "${RELEASE_URL}" > /dev/null 2>&1; then
-            echo "release_exists=true" >> $GITHUB_OUTPUT
-            echo "✅ Confirmed release exists: ${RELEASE_URL}"
-          else
-            echo "release_exists=false" >> $GITHUB_OUTPUT
-            echo "❌ Release not found: ${RELEASE_URL}"
-            echo "Please wait for GitHub Release workflow to complete or check if the release exists."
-            exit 1
-          fi
-
       - name: Clone Strimzi Repository
         run: |
           STRIMZI_REPO="https://github.com/AutoMQ/strimzi-kafka-operator.git"
@@ -125,7 +90,6 @@ jobs:
           # TODO: 测试用URL，后期需要改回 AutoMQ/automq
           AUTOMQ_URL="https://github.com/Rancho-7/automq/releases/download/${AUTOMQ_VERSION}/automq-${AUTOMQ_VERSION}_kafka-${KAFKA_VERSION}.tgz"
           ORIGINAL_KAFKA_URL="https://archive\.apache\.org/dist/kafka/${KAFKA_VERSION}/kafka_2\.13-${KAFKA_VERSION}\.tgz"
-          
           echo "Using AutoMQ version: ${AUTOMQ_VERSION}"
           echo "Using Kafka version: ${KAFKA_VERSION}"
           echo "AutoMQ URL: ${AUTOMQ_URL}"
@@ -152,7 +116,6 @@ jobs:
           cd ./docker-images/artifacts/binaries/kafka/archives/
           AUTOMQ_VERSION="${{ steps.update_release_info.outputs.tag }}"
           KAFKA_VERSION="${{ steps.update_release_info.outputs.kafka_version }}"
-          
           mv automq-${AUTOMQ_VERSION}_kafka-${KAFKA_VERSION}.tgz kafka_2.13-${KAFKA_VERSION}.tgz
           mv automq-${AUTOMQ_VERSION}_kafka-${KAFKA_VERSION}.tgz.sha512 kafka_2.13-${KAFKA_VERSION}.tgz.sha512 
           cd ..
@@ -224,9 +187,8 @@ jobs:
         run: |
           AUTOMQ_VERSION="${{ steps.update_release_info.outputs.tag }}"
           KAFKA_VERSION="${{ steps.update_release_info.outputs.kafka_version }}"
-          IMAGE_TAG="${AUTOMQ_VERSION}-strimzi-kafka-${KAFKA_VERSION}"
-          
-          echo "tags=${{ secrets.DOCKERHUB_USERNAME }}/automq:${IMAGE_TAG}" >> $GITHUB_OUTPUT
+          IMAGE_TAG="${AUTOMQ_VERSION}-strimzi-kafka-${KAFKA_VERSION}"     
+          echo "tags=${{ secrets.DOCKERHUB_USERNAME }}/automq-test:${IMAGE_TAG}" >> $GITHUB_OUTPUT
           echo "Generated image tag: ${IMAGE_TAG}"
       - name: Push AutoMQ Strimzi Image
         run: |
