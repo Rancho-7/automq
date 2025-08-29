@@ -12,6 +12,11 @@ on:
     types:
       - completed
 
+env:
+  KAFKA_VERSION: "3.9.0"
+  STRIMZI_REPO: "https://github.com/AutoMQ/strimzi-kafka-operator.git"
+  STRIMZI_BRANCH: "main"
+
 jobs:
   strimzi-release:
     name: Strimzi Image Release
@@ -30,19 +35,16 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Get release information
-        id: release_info
+      - name: Get and validate release information
         run: |
+          # 获取tag
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             TAG="${{ github.event.inputs.tag }}"
             echo "Using manual input tag: ${TAG}"
           else
-            # 从triggering workflow获取tag信息
             TAG="${{ github.event.workflow_run.head_branch }}"
             echo "Using tag from workflow_run: ${TAG}"
           fi
-          
-          echo "tag=${TAG}" >> $GITHUB_OUTPUT
           
           # 验证tag格式
           if [[ ! "$TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+|-alpha[0-9]+|-beta[0-9]+)?$ ]]; then
@@ -50,18 +52,22 @@ jobs:
             exit 1
           fi
           
-          KAFKA_VERSION="3.9.0"
-          echo "kafka_version=${KAFKA_VERSION}" >> $GITHUB_OUTPUT
+          # 构建URL并设置环境变量
+          AUTOMQ_URL="https://github.com/Rancho-7/automq/releases/download/${TAG}/automq-${TAG}_kafka-${KAFKA_VERSION}.tgz"
+          ORIGINAL_KAFKA_URL="https://archive\.apache\.org/dist/kafka/${KAFKA_VERSION}/kafka_2\.13-${KAFKA_VERSION}\.tgz"
           
-          RELEASE_URL="https://github.com/Rancho-7/automq/releases/download/${TAG}/automq-${TAG}_kafka-${KAFKA_VERSION}.tgz"
-          echo "Checking release URL: ${RELEASE_URL}"
+          {
+            echo "AUTOMQ_VERSION=${TAG}"
+            echo "AUTOMQ_URL=${AUTOMQ_URL}"
+            echo "ORIGINAL_KAFKA_URL=${ORIGINAL_KAFKA_URL}"
+          } >> $GITHUB_ENV
           
-          if curl --head --silent --fail "${RELEASE_URL}" > /dev/null 2>&1; then
-            echo "release_exists=true" >> $GITHUB_OUTPUT
-            echo "✅ Confirmed release exists: ${RELEASE_URL}"
+          # 验证release存在性
+          echo "Checking release URL: ${AUTOMQ_URL}"
+          if curl --head --silent --fail "${AUTOMQ_URL}" > /dev/null 2>&1; then
+            echo "✅ Confirmed release exists: ${AUTOMQ_URL}"
           else
-            echo "release_exists=false" >> $GITHUB_OUTPUT
-            echo "❌ Release not found: ${RELEASE_URL}"
+            echo "❌ Release not found: ${AUTOMQ_URL}"
             echo "Please wait for GitHub Release workflow to complete or check if the release exists."
             exit 1
           fi
@@ -74,48 +80,42 @@ jobs:
 
       - name: Clone Strimzi Repository
         run: |
-          STRIMZI_REPO="https://github.com/AutoMQ/strimzi-kafka-operator.git"
-          STRIMZI_BRANCH="main"
-          
-          git clone --depth 1 --branch "$STRIMZI_BRANCH" "$STRIMZI_REPO" strimzi
+          git clone --depth 1 --branch "${{ env.STRIMZI_BRANCH }}" "${{ env.STRIMZI_REPO }}" strimzi
+
       - name: Update Strimzi Configuration
         run: |
           cd strimzi
-          
-          AUTOMQ_VERSION="${{ steps.release_info.outputs.tag }}"
-          KAFKA_VERSION="${{ steps.release_info.outputs.kafka_version }}"
-          AUTOMQ_URL="https://github.com/AutoMQ/automq/releases/download/${AUTOMQ_VERSION}/automq-${AUTOMQ_VERSION}_kafka-${KAFKA_VERSION}.tgz"
-          ORIGINAL_KAFKA_URL="https://archive\.apache\.org/dist/kafka/${KAFKA_VERSION}/kafka_2\.13-${KAFKA_VERSION}\.tgz"
           
           echo "Using AutoMQ version: ${AUTOMQ_VERSION}"
           echo "Using Kafka version: ${KAFKA_VERSION}"
           echo "AutoMQ URL: ${AUTOMQ_URL}"
           
+          # 获取AutoMQ checksum
           AUTOMQ_CHECKSUM=$(curl -L "$AUTOMQ_URL" | sha512sum | cut -d' ' -f1)
           ORIGINAL_CHECKSUM=$(grep -A 4 "version: ${KAFKA_VERSION}" kafka-versions.yaml | grep "checksum:" | awk '{print $2}')
           
           echo "AutoMQ checksum: ${AUTOMQ_CHECKSUM}"
           echo "Original checksum: ${ORIGINAL_CHECKSUM}"
           
-          # replace kafka url to automq
+          # 替换 kafka url 为 automq
           sed -i "s|${ORIGINAL_KAFKA_URL}|${AUTOMQ_URL}|" kafka-versions.yaml
-          # replace checksum
+          # 替换 checksum
           sed -i "s|${ORIGINAL_CHECKSUM}|${AUTOMQ_CHECKSUM}|" kafka-versions.yaml
-          # set 3.9.0 to default
+          # 设置 3.9.0 为默认版本
           sed -i '/- version: 3\.9\.0/,/^- version:/ { /default: false/c\  default: true
           }' kafka-versions.yaml
           sed -i '/- version: 4\.0\.0/,$ { s/default: true/default: false/; }' kafka-versions.yaml
+
       - name: Prepare Strimzi Image Environment
         run: |
           cd strimzi
           mvn clean install -DskipTests
           make -C docker-images/artifacts java_build
-          cd ./docker-images/artifacts/binaries/kafka/archives/
-          AUTOMQ_VERSION="${{ steps.release_info.outputs.tag }}"
-          KAFKA_VERSION="${{ steps.release_info.outputs.kafka_version }}"
           
-          mv automq-${AUTOMQ_VERSION}_kafka-${KAFKA_VERSION}.tgz kafka_2.13-3.9.0.tgz
-          mv automq-${AUTOMQ_VERSION}_kafka-${KAFKA_VERSION}.tgz.sha512 kafka_2.13-3.9.0.tgz.sha512 
+          # 重命名文件（使用环境变量，避免重复定义）
+          cd ./docker-images/artifacts/binaries/kafka/archives/
+          mv automq-${AUTOMQ_VERSION}_kafka-${KAFKA_VERSION}.tgz kafka_2.13-${KAFKA_VERSION}.tgz
+          mv automq-${AUTOMQ_VERSION}_kafka-${KAFKA_VERSION}.tgz.sha512 kafka_2.13-${KAFKA_VERSION}.tgz.sha512 
           cd ..
           
           IGNORE_LIST="gson-2.9.0.jar
@@ -164,10 +164,12 @@ jobs:
           prometheus-metrics-model-1.3.6.jar"
           
           printf "%s\n" "$IGNORE_LIST" >> 3.9.0.ignorelist
+
       - name: Build Strimzi Docker Images
         run: |
           cd $GITHUB_WORKSPACE/strimzi
           make MVN_ARGS='-DskipTests' docker_build
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -180,16 +182,18 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_READ_WRITE_TOKEN }}
 
-      - name: Determine Image Tags
-        id: image_tags
+      - name: Build and Push AutoMQ Strimzi Image
         run: |
-          AUTOMQ_VERSION="${{ steps.release_info.outputs.tag }}"
-          KAFKA_VERSION="${{ steps.release_info.outputs.kafka_version }}"
+          # 生成image tag（使用环境变量）
           IMAGE_TAG="${AUTOMQ_VERSION}-strimzi-kafka-${KAFKA_VERSION}"
+          FULL_IMAGE_TAG="${{ secrets.DOCKERHUB_USERNAME }}/automq-test:${IMAGE_TAG}"
           
-          echo "tags=${{ secrets.DOCKERHUB_USERNAME }}/automq-test:${IMAGE_TAG}" >> $GITHUB_OUTPUT
           echo "Generated image tag: ${IMAGE_TAG}"
-      - name: Push AutoMQ Strimzi Image
-        run: |
-          docker tag strimzi/kafka:build-kafka-3.9.0 ${{ steps.image_tags.outputs.tags }}
-          docker push ${{ steps.image_tags.outputs.tags }}
+          echo "Full image name: ${FULL_IMAGE_TAG}"
+          
+          # 构建和推送镜像
+          docker tag strimzi/kafka:build-kafka-3.9.0 "${FULL_IMAGE_TAG}"
+          docker push "${FULL_IMAGE_TAG}"
+          
+          # 输出最终的镜像信息
+          echo "Successfully pushed image: ${FULL_IMAGE_TAG}"
