@@ -72,9 +72,6 @@ jobs:
           AUTOMQ_CHECKSUM=$(curl -L "$AUTOMQ_URL" | sha512sum | cut -d' ' -f1)
           ORIGINAL_CHECKSUM=$(grep -A 4 "version: ${KAFKA_VERSION}" kafka-versions.yaml | grep "checksum:" | awk '{print $2}')
 
-          echo "AutoMQ checksum: ${AUTOMQ_CHECKSUM}"
-          echo "Original checksum: ${ORIGINAL_CHECKSUM}"
-
           # 替换 kafka url 为 automq
           sed -i "s|${ORIGINAL_KAFKA_URL}|${AUTOMQ_URL}|" kafka-versions.yaml
           # 替换 checksum
@@ -147,11 +144,6 @@ jobs:
 
           printf "%s\n" "$IGNORE_LIST" >> 3.9.0.ignorelist
 
-      - name: Build Strimzi Docker Images
-        run: |
-          cd $GITHUB_WORKSPACE/strimzi
-          make MVN_ARGS='-DskipTests' docker_build
-
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -167,7 +159,7 @@ jobs:
       - name: Push AutoMQ Strimzi Image
         env:
           DOCKER_ORG: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKER_TAG: "${{ github.ref_name }}-strimziA"
+          DOCKER_TAG: "${{ github.ref_name }}-strimziB"
         run: |
           cd $GITHUB_WORKSPACE/strimzi
 
