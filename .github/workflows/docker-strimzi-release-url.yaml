@@ -144,7 +144,7 @@ jobs:
       - name: Push AutoMQ Strimzi Image
         env:
           DOCKER_ORG: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKER_TAG: "${{ AUTOMQ_VERSION }}-strimzi"
+          DOCKER_TAG: "${{ env.AUTOMQ_VERSION }}-strimzi"
           PROJECT_NAME: "automq"
         run: |
           cd $GITHUB_WORKSPACE/strimzi
