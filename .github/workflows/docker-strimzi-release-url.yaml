@@ -1,16 +1,16 @@
 name: Docker Strimzi Release
 
-on:
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: 'AutoMQ version tag'
-        required: true
-        type: string
-  workflow_run:
-    workflows: ["GitHub Release"]
-    types:
-      - completed
+# on:
+#   workflow_dispatch:
+#     inputs:
+#       tag:
+#         description: 'AutoMQ version tag'
+#         required: true
+#         type: string
+#   workflow_run:
+#     workflows: ["GitHub Release"]
+#     types:
+#       - completed
 
 env:
   KAFKA_VERSION: "3.9.0"
