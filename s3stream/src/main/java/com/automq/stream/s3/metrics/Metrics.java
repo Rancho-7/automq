@@ -87,6 +87,7 @@ public class Metrics {
         private ObservableDoubleGauge histP99Value;
         private ObservableDoubleGauge histMaxValue;
 
+        @SuppressWarnings("this-escape")
         public HistogramBundle(String name, String desc, String unit) {
             this.name = name;
             this.desc = desc;
@@ -188,6 +189,7 @@ public class Metrics {
                         .putAll(histogramAttrs)
                         .build();
                 this.shouldRecord = level.isWithin(globalConfig.getMetricsLevel());
+                histogram.setSnapshotInterval(globalConfig.getMetricsReportIntervalMs());
             }
         }
     }
@@ -196,6 +198,7 @@ public class Metrics {
         private final Function<Meter, LongCounter> newFunc;
         private LongCounter counter = new NoopLongCounter();
 
+        @SuppressWarnings("this-escape")
         public LazyLongCounter(Function<Meter, LongCounter> newFunc) {
             this.newFunc = newFunc;
             waitingSetups.add(this);

@@ -58,6 +58,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
@@ -65,6 +66,7 @@ public class ZeroZoneTrafficInterceptor implements TrafficInterceptor, MetadataP
     private static final Logger LOGGER = LoggerFactory.getLogger(ZeroZoneTrafficInterceptor.class);
     private final ElasticKafkaApis kafkaApis;
     private final ClientRackProvider clientRackProvider;
+    private final List<BucketURI> config;
     private final BucketURI bucketURI;
 
     private final ProxyNodeMapping mapping;
@@ -79,7 +81,7 @@ public class ZeroZoneTrafficInterceptor implements TrafficInterceptor, MetadataP
 
     private final SnapshotReadPartitionsManager snapshotReadPartitionsManager;
     private volatile AutoMQVersion version;
-    private volatile boolean closed = false;
+    private final AtomicBoolean closed = new AtomicBoolean(false);
 
     public ZeroZoneTrafficInterceptor(
         RouterChannelProvider routerChannelProvider,
@@ -109,6 +111,8 @@ public class ZeroZoneTrafficInterceptor implements TrafficInterceptor, MetadataP
 
         AsyncSender asyncSender = new AsyncSender.BrokersAsyncSender(kafkaConfig, kafkaApis.metrics(), "zone_router", time, ZoneRouterPack.ZONE_ROUTER_CLIENT_ID, new LogContext());
 
+        this.config = kafkaConfig.automq().zoneRouterChannels().get();
+
         //noinspection OptionalGetWithoutIsPresent
         this.bucketURI = kafkaConfig.automq().zoneRouterChannels().get().get(0);
         this.clientRackProvider = clientRackProvider;
@@ -132,6 +136,7 @@ public class ZeroZoneTrafficInterceptor implements TrafficInterceptor, MetadataP
         this.snapshotReadPartitionsManager = new SnapshotReadPartitionsManager(kafkaConfig, kafkaApis.metrics(), time, confirmWALProvider,
             (ElasticReplicaManager) kafkaApis.replicaManager(), kafkaApis.metadataCache(), replayer);
         this.snapshotReadPartitionsManager.setVersion(version);
+        kafkaApis.setSnapshotAwaitReadyProvider(this.snapshotReadPartitionsManager::nextSnapshotCf);
         replayer.setCacheEventListener(this.snapshotReadPartitionsManager.cacheEventListener());
         mapping.registerListener(snapshotReadPartitionsManager);
 
@@ -141,7 +146,10 @@ public class ZeroZoneTrafficInterceptor implements TrafficInterceptor, MetadataP
 
     @Override
     public void close() {
-        closed = true;
+        if (closed.compareAndSet(false, true)) {
+            committedEpochManager.close();
+            snapshotReadPartitionsManager.close();
+        }
     }
 
     @Override
@@ -200,7 +208,7 @@ public class ZeroZoneTrafficInterceptor implements TrafficInterceptor, MetadataP
 
     @Override
     public void onMetadataUpdate(MetadataDelta delta, MetadataImage newImage, LoaderManifest manifest) {
-        if (closed) {
+        if (closed.get()) {
             return;
         }
         try {
@@ -225,7 +233,7 @@ public class ZeroZoneTrafficInterceptor implements TrafficInterceptor, MetadataP
 
     @Override
     public String toString() {
-        return "ObjectProduceRouter{bucketURI=" + bucketURI + '}';
+        return "ZeroZoneTrafficInterceptor{config=" + config + '}';
     }
 
     private void fillRackIfMissing(ClientIdMetadata clientId) {

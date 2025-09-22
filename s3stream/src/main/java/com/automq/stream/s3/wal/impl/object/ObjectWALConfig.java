@@ -109,9 +109,26 @@ public class ObjectWALConfig {
         return type;
     }
 
+    @Override
+    public String toString() {
+        return "ObjectWALConfig{" +
+            "batchInterval=" + batchInterval +
+            ", maxBytesInBatch=" + maxBytesInBatch +
+            ", maxUnflushedBytes=" + maxUnflushedBytes +
+            ", maxInflightUploadCount=" + maxInflightUploadCount +
+            ", readAheadObjectCount=" + readAheadObjectCount +
+            ", clusterId='" + clusterId + '\'' +
+            ", nodeId=" + nodeId +
+            ", epoch=" + epoch +
+            ", openMode=" + openMode +
+            ", bucketId=" + bucketId +
+            ", type='" + type + '\'' +
+            '}';
+    }
+
     public static final class Builder {
         private ReservationService reservationService = ReservationService.NOOP;
-        private long batchInterval = 256; // 256ms
+        private long batchInterval = 250; // 250ms
         private long maxBytesInBatch = 8 * 1024 * 1024L; // 8MB
         private long maxUnflushedBytes = 1024 * 1024 * 1024L; // 1GB
         private int maxInflightUploadCount = 50;

@@ -158,6 +158,54 @@ public class AvroRecordBinderTest {
         }
     }
 
+    private static Map<String, Object> toStringKeyMap(Object value) {
+        if (value == null) {
+            return null;
+        }
+        Map<?, ?> map = (Map<?, ?>) value;
+        Map<String, Object> result = new HashMap<>(map.size());
+        for (Map.Entry<?, ?> entry : map.entrySet()) {
+            String key = entry.getKey() == null ? null : entry.getKey().toString();
+            result.put(key, normalizeValue(entry.getValue()));
+        }
+        return result;
+    }
+
+    private static Object normalizeValue(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof CharSequence) {
+            return value.toString();
+        }
+        if (value instanceof List<?>) {
+            List<?> list = (List<?>) value;
+            List<Object> normalized = new ArrayList<>(list.size());
+            for (Object element : list) {
+                normalized.add(normalizeValue(element));
+            }
+            return normalized;
+        }
+        if (value instanceof Map<?, ?>) {
+            return toStringKeyMap(value);
+        }
+        return value;
+    }
+
+    private static <K> Map<K, Object> normalizeMapValues(Object value) {
+        if (value == null) {
+            return null;
+        }
+        Map<?, ?> map = (Map<?, ?>) value;
+        Map<K, Object> result = new HashMap<>(map.size());
+        for (Map.Entry<?, ?> entry : map.entrySet()) {
+            @SuppressWarnings("unchecked")
+            K key = (K) entry.getKey();
+            result.put(key, normalizeValue(entry.getValue()));
+        }
+        return result;
+    }
+
 
     @Test
     public void testSchemaEvolution() {
@@ -190,7 +238,7 @@ public class AvroRecordBinderTest {
         Record bind = recordBinder.bind(avroRecord);
 
         assertEquals(12345L, bind.get(0)); // id
-        assertEquals("John Doe", bind.get(1)); // name
+        assertEquals("John Doe", bind.get(1).toString()); // name
         assertNull(bind.get(2)); // age - doesn't exist in Avro record
     }
 
@@ -222,7 +270,7 @@ public class AvroRecordBinderTest {
 
         Record bind1 = recordBinder.bind(record1);
         assertEquals(1L, bind1.get(0));
-        assertEquals("Alice", bind1.get(1));
+        assertEquals("Alice", bind1.get(1).toString());
 
         // Reuse wrapper for second record
         GenericRecord record2 = new GenericData.Record(avroSchema);
@@ -231,7 +279,7 @@ public class AvroRecordBinderTest {
 
         Record bind2 = recordBinder.bind(record2);
         assertEquals(2L, bind2.get(0));
-        assertEquals("Bob", bind2.get(1));
+        assertEquals("Bob", bind2.get(1).toString());
     }
 
 
@@ -255,10 +303,11 @@ public class AvroRecordBinderTest {
 
         // Convert Avro record to Iceberg record using the wrapper
         org.apache.iceberg.Schema icebergSchema = AvroSchemaUtil.toIceberg(avroSchema);
+
         Record icebergRecord = new RecordBinder(icebergSchema, avroSchema).bind(record);
 
         // Verify the field value
-        assertEquals("test_string", icebergRecord.getField("stringField"));
+        assertEquals("test_string", icebergRecord.getField("stringField").toString());
 
         // Send the record to the table
         testSendRecord(icebergSchema, icebergRecord);
@@ -697,9 +746,46 @@ public class AvroRecordBinderTest {
         Record icebergRecord = new RecordBinder(icebergSchema, avroSchema).bind(serializeAndDeserialize(avroRecord, avroSchema));
 
         // Verify the field value
-        assertEquals(Arrays.asList("a", "b", "c"), icebergRecord.getField("listField"));
+        assertEquals(Arrays.asList("a", "b", "c"), normalizeValue(icebergRecord.getField("listField")));
 
         // Send the record to the table
+        testSendRecord(icebergSchema, icebergRecord);
+    }
+
+    @Test
+    public void testUnionListConversion() {
+        String avroSchemaStr = "    {\n" +
+            "      \"type\": \"record\",\n" +
+            "      \"name\": \"TestRecord\",\n" +
+            "      \"fields\": [\n" +
+            "        {\n" +
+            "          \"name\": \"listField\",\n" +
+            "          \"type\": [\"null\", {\"type\": \"array\", \"items\": [\"null\", \"string\"]}],\n" +
+            "          \"default\": null\n" +
+            "        }\n" +
+            "      ]\n" +
+            "    }\n";
+
+        avroSchema = new Schema.Parser().parse(avroSchemaStr);
+
+        Schema listSchema = avroSchema.getField("listField").schema().getTypes().stream()
+            .filter(s -> s.getType() == Schema.Type.ARRAY)
+            .findFirst()
+            .orElseThrow(() -> new IllegalStateException("UNION schema does not contain an ARRAY type"));
+
+        GenericData.Array<Object> listValue = new GenericData.Array<>(3, listSchema);
+        listValue.add(new Utf8("a"));
+        listValue.add(null);
+        listValue.add(new Utf8("c"));
+
+        GenericRecord avroRecord = new GenericData.Record(avroSchema);
+        avroRecord.put("listField", listValue);
+
+        org.apache.iceberg.Schema icebergSchema = AvroSchemaUtil.toIceberg(avroSchema);
+        Record icebergRecord = new RecordBinder(icebergSchema, avroSchema).bind(serializeAndDeserialize(avroRecord, avroSchema));
+
+        assertEquals(Arrays.asList("a", null, "c"), normalizeValue(icebergRecord.getField("listField")));
+
         testSendRecord(icebergSchema, icebergRecord);
     }
 
@@ -727,7 +813,7 @@ public class AvroRecordBinderTest {
         Record icebergRecord = new RecordBinder(icebergSchema, avroSchema).bind(serializeAndDeserialize(avroRecord, avroSchema));
 
         // Verify the field value
-        assertEquals(map, icebergRecord.getField("mapField"));
+        assertEquals(map, normalizeValue(icebergRecord.getField("mapField")));
 
         // Send the record to the table
         testSendRecord(icebergSchema, icebergRecord);
@@ -757,7 +843,7 @@ public class AvroRecordBinderTest {
         Record icebergRecord = new RecordBinder(icebergSchema, avroSchema).bind(serializeAndDeserialize(avroRecord, avroSchema));
 
         // Verify the field value
-        assertEquals(map, icebergRecord.getField("mapField"));
+        assertEquals(map, normalizeValue(icebergRecord.getField("mapField")));
 
         // Send the record to the table
         testSendRecord(icebergSchema, icebergRecord);
@@ -812,13 +898,102 @@ public class AvroRecordBinderTest {
         Record icebergRecord = new RecordBinder(icebergSchema, avroSchema).bind(serializeAndDeserialize(avroRecord, avroSchema));
 
         // Convert the list of records back to a map
-        @SuppressWarnings("unchecked")
-        Map<Integer, String> mapField = (Map<Integer, String>) icebergRecord.getField("mapField");
+        Map<Integer, Object> mapField = normalizeMapValues(icebergRecord.getField("mapField"));
         // Verify the field value
         assertEquals(expectedMap, mapField);
 
         // Send the record to the table
         testSendRecord(icebergSchema, icebergRecord);
+    }
+
+    @Test
+    public void testUnionStringMapConversion() {
+        String avroSchemaStr = "    {\n" +
+            "      \"type\": \"record\",\n" +
+            "      \"name\": \"TestRecord\",\n" +
+            "      \"fields\": [\n" +
+            "        {\n" +
+            "          \"name\": \"mapField\",\n" +
+            "          \"type\": [\"null\", {\"type\": \"map\", \"values\": [\"null\", \"string\"]}],\n" +
+            "          \"default\": null\n" +
+            "        }\n" +
+            "      ]\n" +
+            "    }\n";
+
+        avroSchema = new Schema.Parser().parse(avroSchemaStr);
+
+        GenericRecord avroRecord = new GenericData.Record(avroSchema);
+        Map<String, Object> expectedMap = new HashMap<>();
+        expectedMap.put("key1", "value1");
+        expectedMap.put("key2", null);
+        avroRecord.put("mapField", expectedMap);
+
+        GenericRecord record = serializeAndDeserialize(avroRecord, avroSchema);
+
+        org.apache.iceberg.Schema icebergSchema = AvroSchemaUtil.toIceberg(avroSchema);
+        Record icebergRecord = new RecordBinder(icebergSchema, avroSchema).bind(record);
+
+        assertEquals(expectedMap, normalizeValue(icebergRecord.getField("mapField")));
+
+        testSendRecord(icebergSchema, icebergRecord);
+    }
+
+    @Test
+    public void testUnionArrayMapConversion() {
+        String avroSchemaStr = "    {\n" +
+            "      \"type\": \"record\",\n" +
+            "      \"name\": \"TestRecord\",\n" +
+            "      \"fields\": [\n" +
+            "        {\n" +
+            "          \"name\": \"mapField\",\n" +
+            "          \"type\": {\n" +
+            "            \"type\": \"array\",\n" +
+            "            \"logicalType\": \"map\",\n" +
+            "            \"items\": [\n" +
+            "              \"null\",\n" +
+            "              {\n" +
+            "                \"type\": \"record\",\n" +
+            "                \"name\": \"UnionMapEntry\",\n" +
+            "                \"fields\": [\n" +
+            "                  {\"name\": \"key\", \"type\": \"int\"},\n" +
+            "                  {\"name\": \"value\", \"type\": \"string\"}\n" +
+            "                ]\n" +
+            "              }\n" +
+            "            ]\n" +
+            "          }\n" +
+            "        }\n" +
+            "      ]\n" +
+            "    }\n";
+
+        avroSchema = new Schema.Parser().parse(avroSchemaStr);
+
+        Map<Integer, String> expectedMap = new HashMap<>();
+        expectedMap.put(10, "alpha");
+        expectedMap.put(20, "beta");
+
+        Schema mapFieldSchema = avroSchema.getField("mapField").schema();
+        Schema elementUnionSchema = mapFieldSchema.getElementType();
+        Schema entrySchema = elementUnionSchema.getTypes().stream()
+            .filter(s -> s.getType() == Schema.Type.RECORD)
+            .findFirst()
+            .orElseThrow(() -> new IllegalStateException("Array element UNION schema does not contain a RECORD type"));
+
+        GenericData.Array<Object> mapEntries = new GenericData.Array<>(expectedMap.size() + 1, mapFieldSchema);
+        for (Map.Entry<Integer, String> entry : expectedMap.entrySet()) {
+            GenericRecord mapEntry = new GenericData.Record(entrySchema);
+            mapEntry.put("key", entry.getKey());
+            mapEntry.put("value", entry.getValue());
+            mapEntries.add(mapEntry);
+        }
+        mapEntries.add(null);
+
+        AvroValueAdapter adapter = new AvroValueAdapter();
+        Types.MapType mapType = Types.MapType.ofOptional(1, 2, Types.IntegerType.get(), Types.StringType.get());
+
+        @SuppressWarnings("unchecked")
+        Map<Integer, Object> result = (Map<Integer, Object>) adapter.convert(mapEntries, mapFieldSchema, mapType);
+
+        assertEquals(expectedMap, result);
     }
 
     // Test method for converting a record with nested fields
@@ -856,7 +1031,7 @@ public class AvroRecordBinderTest {
 
         // Verify the field values
         Record nestedIcebergRecord = (Record) icebergRecord.getField("nestedField");
-        assertEquals("nested_string", nestedIcebergRecord.getField("nestedStringField"));
+        assertEquals("nested_string", nestedIcebergRecord.getField("nestedStringField").toString());
         assertEquals(42, nestedIcebergRecord.getField("nestedIntField"));
 
         // Send the record to the table
@@ -891,7 +1066,7 @@ public class AvroRecordBinderTest {
         Record icebergRecord = new RecordBinder(icebergSchema, avroSchema).bind(serializeAndDeserialize(avroRecord, avroSchema));
 
         // Verify the field values
-        assertEquals("optional_string", icebergRecord.getField("optionalStringField"));
+        assertEquals("optional_string", icebergRecord.getField("optionalStringField").toString());
         assertEquals(42, icebergRecord.getField("optionalIntField"));
         assertNull(icebergRecord.getField("optionalStringNullField"));
         assertNull(icebergRecord.getField("optionalIntNullField"));
@@ -925,7 +1100,7 @@ public class AvroRecordBinderTest {
         Record icebergRecord = new RecordBinder(icebergSchema, avroSchema).bind(serializeAndDeserialize(avroRecord, avroSchema));
 
         // Verify the field values
-        assertEquals("default_string", icebergRecord.getField("defaultStringField"));
+        assertEquals("default_string", icebergRecord.getField("defaultStringField").toString());
         assertEquals(42, icebergRecord.getField("defaultIntField"));
 
         // Send the record to the table
@@ -973,7 +1148,7 @@ public class AvroRecordBinderTest {
 
         // Verify the field value
         Object unionField1 = icebergRecord.getField("unionField1");
-        assertEquals("union_string", unionField1);
+        assertEquals("union_string", unionField1.toString());
 
         Object unionField2 = icebergRecord.getField("unionField2");
         assertEquals(42, unionField2);
@@ -1041,5 +1216,210 @@ public class AvroRecordBinderTest {
 
         Record boundRecordWithNull = recordBinder.bind(envelopeRecordWithNull);
         assertNull(boundRecordWithNull.getField("before"));
+    }
+
+    // Test method for field count statistics
+    @Test
+    public void testFieldCountStatistics() {
+        // Test different field types and their count calculations
+        String avroSchemaStr = "{\n" +
+            "  \"type\": \"record\",\n" +
+            "  \"name\": \"TestRecord\",\n" +
+            "  \"fields\": [\n" +
+            "    {\"name\": \"smallString\", \"type\": \"string\"},\n" +
+            "    {\"name\": \"largeString\", \"type\": \"string\"},\n" +
+            "    {\"name\": \"intField\", \"type\": \"int\"},\n" +
+            "    {\"name\": \"binaryField\", \"type\": \"bytes\"}\n" +
+            "  ]\n" +
+            "}";
+
+        Schema avroSchema = new Schema.Parser().parse(avroSchemaStr);
+        org.apache.iceberg.Schema icebergSchema = AvroSchemaUtil.toIceberg(avroSchema);
+        RecordBinder recordBinder = new RecordBinder(icebergSchema, avroSchema);
+
+        // Create test record with different field sizes
+        GenericRecord avroRecord = new GenericData.Record(avroSchema);
+        avroRecord.put("smallString", "small"); // 5 chars = 1 field (5+23)/24 = 1
+        avroRecord.put("largeString", "a".repeat(50)); // 50 chars = 3 fields (50+23)/24 = 3
+        avroRecord.put("intField", 42); // primitive = 1 field
+        avroRecord.put("binaryField", ByteBuffer.wrap("test".repeat(10).getBytes())); // 40 bytes = 2 fields (40+31)/32 = 2
+
+        // Bind record - this should trigger field counting
+        Record icebergRecord = recordBinder.bind(avroRecord);
+
+        // Access all fields to trigger counting
+        assertEquals("small", icebergRecord.getField("smallString"));
+        assertEquals("a".repeat(50), icebergRecord.getField("largeString"));
+        assertEquals(42, icebergRecord.getField("intField"));
+        assertEquals("test".repeat(10), new String(((ByteBuffer) icebergRecord.getField("binaryField")).array()));
+
+        // Check field count: 1 + 3 + 1 + 2 = 7 fields total
+        long fieldCount = recordBinder.getAndResetFieldCount();
+        assertEquals(7, fieldCount);
+
+        // Second call should return 0 (reset)
+        assertEquals(0, recordBinder.getAndResetFieldCount());
+
+        testSendRecord(icebergSchema.asStruct().asSchema(), icebergRecord);
+        assertEquals(7, recordBinder.getAndResetFieldCount());
+    }
+
+    @Test
+    public void testFieldCountWithComplexTypes() {
+        // Test field counting for LIST and MAP types
+        String avroSchemaStr = "{\n" +
+            "  \"type\": \"record\",\n" +
+            "  \"name\": \"ComplexRecord\",\n" +
+            "  \"fields\": [\n" +
+            "    {\"name\": \"stringList\", \"type\": {\"type\": \"array\", \"items\": \"string\"}},\n" +
+            "    {\"name\": \"stringMap\", \"type\": {\"type\": \"map\", \"values\": \"string\"}}\n" +
+            "  ]\n" +
+            "}";
+
+        Schema avroSchema = new Schema.Parser().parse(avroSchemaStr);
+        org.apache.iceberg.Schema icebergSchema = AvroSchemaUtil.toIceberg(avroSchema);
+        RecordBinder recordBinder = new RecordBinder(icebergSchema, avroSchema);
+
+        GenericRecord avroRecord = new GenericData.Record(avroSchema);
+        // List with 3 small strings: 1 (list itself) + 3 * 1 = 4 fields
+        avroRecord.put("stringList", Arrays.asList("a", "b", "c"));
+
+        // Map with 2 entries: 1 (map itself) + 2 * (1 key + 1 value) = 5 fields
+        Map<String, String> map = new HashMap<>();
+        map.put("key1", "val1");
+        map.put("key2", "val2");
+        avroRecord.put("stringMap", map);
+
+        Record icebergRecord = recordBinder.bind(avroRecord);
+
+        // Access fields to trigger counting
+        assertEquals(Arrays.asList("a", "b", "c"), normalizeValue(icebergRecord.getField("stringList")));
+        assertEquals(map, normalizeValue(icebergRecord.getField("stringMap")));
+
+        // Total: 4 (list) + 5 (map) = 9 fields
+        long fieldCount = recordBinder.getAndResetFieldCount();
+        assertEquals(9, fieldCount);
+
+        testSendRecord(icebergSchema.asStruct().asSchema(), icebergRecord);
+        assertEquals(9, recordBinder.getAndResetFieldCount());
+    }
+
+    @Test
+    public void testFieldCountWithNestedStructure() {
+        // Test field counting for nested records
+        String avroSchemaStr = "{\n" +
+            "  \"type\": \"record\",\n" +
+            "  \"name\": \"NestedRecord\",\n" +
+            "  \"fields\": [\n" +
+            "    {\"name\": \"simpleField\", \"type\": \"string\"},\n" +
+            "    {\n" +
+            "      \"name\": \"nestedField\",\n" +
+            "      \"type\": {\n" +
+            "        \"type\": \"record\",\n" +
+            "        \"name\": \"Nested\",\n" +
+            "        \"fields\": [\n" +
+            "          {\"name\": \"nestedString\", \"type\": \"string\"},\n" +
+            "          {\"name\": \"nestedInt\", \"type\": \"int\"}\n" +
+            "        ]\n" +
+            "      }\n" +
+            "    }\n" +
+            "  ]\n" +
+            "}";
+
+        Schema avroSchema = new Schema.Parser().parse(avroSchemaStr);
+        org.apache.iceberg.Schema icebergSchema = AvroSchemaUtil.toIceberg(avroSchema);
+        RecordBinder recordBinder = new RecordBinder(icebergSchema, avroSchema);
+
+        // Create nested record
+        GenericRecord nestedRecord = new GenericData.Record(avroSchema.getField("nestedField").schema());
+        nestedRecord.put("nestedString", "nested"); // 1 field
+        nestedRecord.put("nestedInt", 123); // 1 field
+
+        GenericRecord mainRecord = new GenericData.Record(avroSchema);
+        mainRecord.put("simpleField", "simple"); // 1 field
+        mainRecord.put("nestedField", nestedRecord); // STRUCT fields are counted when accessed
+
+        Record icebergRecord = recordBinder.bind(mainRecord);
+
+        // Access all fields including nested ones
+        assertEquals("simple", icebergRecord.getField("simpleField"));
+        Record nested = (Record) icebergRecord.getField("nestedField");
+        assertEquals("nested", nested.getField("nestedString"));
+        assertEquals(123, nested.getField("nestedInt"));
+
+        // Total: 1 (simple) + 1(struct) + 1 (nested string) + 1 (nested int) = 4 fields
+        // Note: STRUCT type itself doesn't add to count, only its leaf fields
+        long fieldCount = recordBinder.getAndResetFieldCount();
+        assertEquals(4, fieldCount);
+
+        testSendRecord(icebergSchema.asStruct().asSchema(), icebergRecord);
+        assertEquals(4, recordBinder.getAndResetFieldCount());
+    }
+
+    @Test
+    public void testFieldCountBatchAccumulation() {
+        // Test that field counts accumulate across multiple record bindings
+        String avroSchemaStr = "{\n" +
+            "  \"type\": \"record\",\n" +
+            "  \"name\": \"SimpleRecord\",\n" +
+            "  \"fields\": [\n" +
+            "    {\"name\": \"stringField\", \"type\": \"string\"},\n" +
+            "    {\"name\": \"intField\", \"type\": \"int\"}\n" +
+            "  ]\n" +
+            "}";
+
+        Schema avroSchema = new Schema.Parser().parse(avroSchemaStr);
+        org.apache.iceberg.Schema icebergSchema = AvroSchemaUtil.toIceberg(avroSchema);
+        RecordBinder recordBinder = new RecordBinder(icebergSchema, avroSchema);
+
+        // Process multiple records
+        for (int i = 0; i < 3; i++) {
+            GenericRecord avroRecord = new GenericData.Record(avroSchema);
+            avroRecord.put("stringField", "test" + i); // 1 field each
+            avroRecord.put("intField", i); // 1 field each
+
+            Record icebergRecord = recordBinder.bind(avroRecord);
+            // Access fields to trigger counting
+            icebergRecord.getField("stringField");
+            icebergRecord.getField("intField");
+        }
+
+        // Total: 3 records * 2 fields each = 6 fields
+        long totalFieldCount = recordBinder.getAndResetFieldCount();
+        assertEquals(6, totalFieldCount);
+    }
+
+    @Test
+    public void testFieldCountWithNullValues() {
+        // Test that null values don't contribute to field count
+        String avroSchemaStr = "{\n" +
+            "  \"type\": \"record\",\n" +
+            "  \"name\": \"NullableRecord\",\n" +
+            "  \"fields\": [\n" +
+            "    {\"name\": \"nonNullField\", \"type\": \"string\"},\n" +
+            "    {\"name\": \"nullField\", \"type\": [\"null\", \"string\"], \"default\": null}\n" +
+            "  ]\n" +
+            "}";
+
+        Schema avroSchema = new Schema.Parser().parse(avroSchemaStr);
+        org.apache.iceberg.Schema icebergSchema = AvroSchemaUtil.toIceberg(avroSchema);
+        RecordBinder recordBinder = new RecordBinder(icebergSchema, avroSchema);
+
+        GenericRecord avroRecord = new GenericData.Record(avroSchema);
+        avroRecord.put("nonNullField", "value"); // 1 field
+        avroRecord.put("nullField", null); // 0 fields
+
+        Record icebergRecord = recordBinder.bind(avroRecord);
+
+        // Access both fields
+        assertEquals("value", icebergRecord.getField("nonNullField"));
+        assertNull(icebergRecord.getField("nullField"));
+
+        // Only the non-null field should count
+        long fieldCount = recordBinder.getAndResetFieldCount();
+        assertEquals(1, fieldCount);
+
+        testSendRecord(icebergSchema.asStruct().asSchema(), icebergRecord);
+        assertEquals(1, recordBinder.getAndResetFieldCount());
     }
 }
