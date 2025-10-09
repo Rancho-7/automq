@@ -19,6 +19,8 @@
 
 package kafka.log.streamaspect;
 
+import kafka.automq.zerozone.LinkRecord;
+import kafka.automq.zerozone.ZeroZoneThreadLocalContext;
 import kafka.log.stream.s3.telemetry.ContextUtils;
 import kafka.log.stream.s3.telemetry.TelemetryConstants;
 
@@ -46,6 +48,7 @@ import com.automq.stream.s3.context.AppendContext;
 import com.automq.stream.s3.context.FetchContext;
 import com.automq.stream.s3.trace.TraceUtils;
 import com.automq.stream.utils.FutureUtil;
+import com.google.common.annotations.VisibleForTesting;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -100,6 +103,10 @@ public class ElasticLogFileRecords implements AutoCloseable {
 
     public int sizeInBytes() {
         return size.get();
+    }
+
+    public void size(int size) {
+        this.size.set(size);
     }
 
     public long nextOffset() {
@@ -211,14 +218,20 @@ public class ElasticLogFileRecords implements AutoCloseable {
         // Note that the calculation of count requires strong consistency between nextOffset and the baseOffset of records.
         int count = (int) (lastOffset - nextOffset());
         com.automq.stream.DefaultRecordBatch batch = new com.automq.stream.DefaultRecordBatch(count, 0, Collections.emptyMap(), records.buffer());
-
         AppendContext context = ContextUtils.createAppendContext();
+        ZeroZoneThreadLocalContext.WriteContext writeContext = ZeroZoneThreadLocalContext.writeContext();
+        ByteBuf linkRecord = LinkRecord.encode(writeContext.channelOffset(), records);
+        if (linkRecord != null) {
+            context.linkRecord(linkRecord);
+        }
         CompletableFuture<?> cf;
         try {
             cf = TraceUtils.runWithSpanAsync(context, Attributes.empty(), "ElasticLogFileRecords::append",
                     () -> streamSlice.append(context, batch));
         } catch (Throwable ex) {
             throw new IOException("Failed to append to stream " + streamSlice.stream().streamId(), ex);
+        } finally {
+            writeContext.reset();
         }
 
         size.getAndAdd(appendSize);
@@ -406,7 +419,8 @@ public class ElasticLogFileRecords implements AutoCloseable {
     }
 
     static class StreamSegmentInputStream implements LogInputStream<RecordBatch> {
-        private static final int FETCH_BATCH_SIZE = 64 * 1024;
+        @VisibleForTesting
+        protected static final int FETCH_BATCH_SIZE = 512 * 1024;
         private final ElasticLogFileRecords elasticLogFileRecords;
         private final Queue<RecordBatch> remaining = new LinkedList<>();
         private final int maxSize;
@@ -446,9 +460,9 @@ public class ElasticLogFileRecords implements AutoCloseable {
                                 buf = heapBuf;
                             }
                             readSize += buf.remaining();
+                            nextFetchOffset = Math.max(streamRecord.lastOffset(), nextFetchOffset);
                             for (RecordBatch r : MemoryRecords.readableRecords(buf).batches()) {
                                 remaining.offer(r);
-                                nextFetchOffset = r.lastOffset() - elasticLogFileRecords.baseOffset + 1;
                             }
                         } catch (Throwable e) {
                             ElasticStreamSlice slice = elasticLogFileRecords.streamSlice;

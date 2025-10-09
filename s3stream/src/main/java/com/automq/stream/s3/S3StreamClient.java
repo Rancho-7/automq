@@ -206,7 +206,7 @@ public class S3StreamClient implements StreamClient {
         return S3Stream.create(
             metadata.streamId(), metadata.epoch(),
             metadata.startOffset(), metadata.endOffset(),
-            storage, streamManager, networkInboundBucket, networkOutboundBucket, options);
+            storage, streamManager, options);
     }
 
     @Override
@@ -326,6 +326,11 @@ public class S3StreamClient implements StreamClient {
         }
 
         @Override
+        public void confirmOffset(long offset) {
+            stream.confirmOffset(offset);
+        }
+
+        @Override
         public long nextOffset() {
             return stream.nextOffset();
         }
@@ -381,6 +386,11 @@ public class S3StreamClient implements StreamClient {
                     closingStreams.remove(streamId(), this);
                 }));
             });
+        }
+
+        @Override
+        public CompletableFuture<AppendResult> lastAppendFuture() {
+            return stream.lastAppendFuture();
         }
 
         public boolean isClosed() {

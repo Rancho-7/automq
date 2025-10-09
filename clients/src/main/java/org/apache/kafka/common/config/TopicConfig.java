@@ -264,8 +264,51 @@ public class TopicConfig {
     public static final String TABLE_TOPIC_COMMIT_INTERVAL_DOC = "The table topic commit interval(ms)";
     public static final String TABLE_TOPIC_NAMESPACE_CONFIG = "automq.table.topic.namespace";
     public static final String TABLE_TOPIC_NAMESPACE_DOC = "The table topic table namespace";
+
     public static final String TABLE_TOPIC_SCHEMA_TYPE_CONFIG = "automq.table.topic.schema.type";
-    public static final String TABLE_TOPIC_SCHEMA_TYPE_DOC = "The table topic schema type, support schemaless, schema";
+    public static final String TABLE_TOPIC_SCHEMA_TYPE_DOC = "[DEPRECATED] The table topic schema type configuration. " +
+        "This configuration is deprecated and will be removed in a future release. " +
+        "Please use the new separate converter and transform configurations instead. " +
+        "Supported values: 'schemaless' (maps to convert.value.type=raw, transform.value.type=none), " +
+        "'schema' (maps to convert.value.type=by_schema_id, transform.value.type=flatten).";
+
+    public static final String AUTOMQ_TABLE_TOPIC_CONVERT_VALUE_TYPE_CONFIG = "automq.table.topic.convert.value.type";
+    public static final String AUTOMQ_TABLE_TOPIC_CONVERT_VALUE_TYPE_DOC = "How to parse Kafka record values. " +
+        "Supported: 'raw', 'string', 'by_schema_id', 'by_latest_schema'. " +
+        "Schema Registry URL required for 'by_schema_id' and 'by_latest_schema'.";
+    public static final String AUTOMQ_TABLE_TOPIC_CONVERT_KEY_TYPE_CONFIG = "automq.table.topic.convert.key.type";
+    public static final String AUTOMQ_TABLE_TOPIC_CONVERT_KEY_TYPE_DOC = "How to parse Kafka record keys. " +
+        "Supported: 'raw', 'string', 'by_schema_id', 'by_latest_schema'. " +
+        "Schema Registry URL required for 'by_schema_id' and 'by_latest_schema'.";
+
+    public static final String AUTOMQ_TABLE_TOPIC_CONVERT_VALUE_BY_LATEST_SCHEMA_SUBJECT_CONFIG =
+        "automq.table.topic.convert.value.by_latest_schema.subject";
+    public static final String AUTOMQ_TABLE_TOPIC_CONVERT_VALUE_BY_LATEST_SCHEMA_SUBJECT_DOC =
+        "Subject name to resolve the latest value schema from Schema Registry when using convert.value.type=by_latest_schema. " +
+        "If not set, defaults to '<topic>-value'.";
+    public static final String AUTOMQ_TABLE_TOPIC_CONVERT_VALUE_BY_LATEST_SCHEMA_MESSAGE_FULL_NAME_CONFIG =
+        "automq.table.topic.convert.value.by_latest_schema.message.full.name";
+    public static final String AUTOMQ_TABLE_TOPIC_CONVERT_VALUE_BY_LATEST_SCHEMA_MESSAGE_FULL_NAME_DOC =
+        "Fully-qualified message name for the latest value schema (if using Protobuf) when convert.value.type=by_latest_schema." +
+        "If not set, uses the first message.";
+
+    public static final String AUTOMQ_TABLE_TOPIC_CONVERT_KEY_BY_LATEST_SCHEMA_SUBJECT_CONFIG =
+        "automq.table.topic.convert.key.by_latest_schema.subject";
+    public static final String AUTOMQ_TABLE_TOPIC_CONVERT_KEY_BY_LATEST_SCHEMA_SUBJECT_DOC =
+        "Subject name to resolve the latest key schema from Schema Registry when using convert.key.type=by_latest_schema. " +
+        "If not set, defaults to '<topic>-key'.";
+    public static final String AUTOMQ_TABLE_TOPIC_CONVERT_KEY_BY_LATEST_SCHEMA_MESSAGE_FULL_NAME_CONFIG =
+        "automq.table.topic.convert.key.by_latest_schema.message.full.name";
+    public static final String AUTOMQ_TABLE_TOPIC_CONVERT_KEY_BY_LATEST_SCHEMA_MESSAGE_FULL_NAME_DOC =
+        "Fully-qualified message name for the latest key schema (if using Protobuf) when convert.key.type=by_latest_schema. " +
+        "If not set, uses the first message.";
+
+    public static final String AUTOMQ_TABLE_TOPIC_TRANSFORM_VALUE_TYPE_CONFIG = "automq.table.topic.transform.value.type";
+    public static final String AUTOMQ_TABLE_TOPIC_TRANSFORM_VALUE_TYPE_DOC = "Transformation to apply to the record value after conversion. " +
+        "Supported: 'none', 'flatten' (extract fields from structured records), " +
+        "'flatten_debezium' (process Debezium CDC events). " +
+        "Note: 'flatten_debezium' requires schema-based conversion.";
+
     public static final String TABLE_TOPIC_ID_COLUMNS_CONFIG = "automq.table.topic.id.columns";
     public static final String TABLE_TOPIC_ID_COLUMNS_DOC = "The primary key, comma-separated list of columns that identify a row in tables."
         + "ex. [region, name]";
@@ -275,6 +318,9 @@ public class TopicConfig {
     public static final String TABLE_TOPIC_UPSERT_ENABLE_DOC = "The configuration controls whether enable table topic upsert";
     public static final String TABLE_TOPIC_CDC_FIELD_CONFIG = "automq.table.topic.cdc.field";
     public static final String TABLE_TOPIC_CDC_FIELD_DOC = "The name of the field containing the CDC operation, I, U, or D";
+
+    public static final String AUTOMQ_TABLE_TOPIC_ERRORS_TOLERANCE_CONFIG = "automq.table.topic.errors.tolerance";
+    public static final String AUTOMQ_TABLE_TOPIC_ERRORS_TOLERANCE_DOC = "Configures the error handling strategy for table topic record processing. Valid values are <code>none</code>, <code>invalid_data</code>, and <code>all</code>.";
 
     public static final String KAFKA_LINKS_ID_CONFIG = "automq.kafka.links.id";
     public static final String KAFKA_LINKS_ID_DOC = "The unique id of a kafka link";

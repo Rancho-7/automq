@@ -17,12 +17,13 @@
 
 package kafka.server
 
+import com.automq.stream.s3.S3Storage
 import kafka.automq.backpressure.{BackPressureConfig, BackPressureManager, DefaultBackPressureManager, Regulator}
 import kafka.automq.failover.FailoverListener
 import kafka.automq.kafkalinking.KafkaLinkingManager
 import kafka.automq.interceptor.{NoopTrafficInterceptor, TrafficInterceptor}
 import kafka.automq.table.TableManager
-import kafka.automq.zerozone.{DefaultClientRackProvider, ZeroZoneTrafficInterceptor}
+import kafka.automq.zerozone.{ConfirmWALProvider, DefaultClientRackProvider, DefaultConfirmWALProvider, DefaultRouterChannelProvider, LinkRecordDecoder, RouterChannelProvider, ZeroZoneTrafficInterceptor}
 import kafka.cluster.EndPoint
 import kafka.coordinator.group.{CoordinatorLoaderImpl, CoordinatorPartitionWriter, GroupCoordinatorAdapter}
 import kafka.coordinator.transaction.{ProducerIdManager, TransactionCoordinator}
@@ -163,6 +164,8 @@ class BrokerServer(
 
   def metadataLoader: MetadataLoader = sharedServer.loader
 
+  var routerChannelProvider: RouterChannelProvider = _
+  var confirmWALProvider: ConfirmWALProvider = _
   var trafficInterceptor: TrafficInterceptor = _
 
   var backPressureManager: BackPressureManager = _
@@ -567,10 +570,16 @@ class BrokerServer(
 
 
       // AutoMQ inject start
+      routerChannelProvider = newRouterChannelProvider()
+      confirmWALProvider = newConfirmWALProvider()
+      if (routerChannelProvider != null) {
+        S3Storage.setLinkRecordDecoder(new LinkRecordDecoder(routerChannelProvider))
+      }
       ElasticLogManager.init(config, clusterId, this)
       trafficInterceptor = newTrafficInterceptor()
       dataPlaneRequestProcessor.asInstanceOf[ElasticKafkaApis].setTrafficInterceptor(trafficInterceptor)
       replicaManager.setTrafficInterceptor(trafficInterceptor)
+      replicaManager.setS3StreamContext(com.automq.stream.Context.instance())
 
       tableManager = new TableManager(metadataCache, config)
       newPartitionLifecycleListeners().forEach(l => {
@@ -712,6 +721,11 @@ class BrokerServer(
       // 2. before metadataListener start close to ensure S3Stream can read the latest metadata.
       if (replicaManager != null) {
         CoreUtils.swallow(replicaManager.awaitAllPartitionShutdown(), this)
+        CoreUtils.swallow(trafficInterceptor.close(), this)
+        if (routerChannelProvider != null) {
+          CoreUtils.swallow(routerChannelProvider.close(), this)
+        }
+        CoreUtils.swallow(ElasticLogManager.shutdown(), this)
       }
       // AutoMQ for Kafka inject end
 
@@ -831,11 +845,26 @@ class BrokerServer(
     )
   }
 
+  protected def newRouterChannelProvider(): RouterChannelProvider = {
+    if (config.automq.zoneRouterChannels().isEmpty) {
+      return null
+    }
+    val bucketURI = config.automq.zoneRouterChannels.get.get(0)
+    new DefaultRouterChannelProvider(config.nodeId, config.automq.nodeEpoch, bucketURI, dataPlaneRequestProcessor.clusterId)
+  }
+
+  protected def newConfirmWALProvider(): ConfirmWALProvider = {
+    if (config.automq.zoneRouterChannels().isEmpty) {
+      return null
+    }
+    new DefaultConfirmWALProvider(dataPlaneRequestProcessor.clusterId)
+  }
+
   protected def newTrafficInterceptor(): TrafficInterceptor = {
     val trafficInterceptor = if (config.automq.zoneRouterChannels().isEmpty) {
       new NoopTrafficInterceptor(dataPlaneRequestProcessor.asInstanceOf[ElasticKafkaApis], metadataCache)
     } else {
-      val zeroZoneRouter = new ZeroZoneTrafficInterceptor(dataPlaneRequestProcessor.asInstanceOf[ElasticKafkaApis], metadataCache, clientRackProvider, config, config.automq.zoneRouterChannels().get())
+      val zeroZoneRouter = new ZeroZoneTrafficInterceptor(routerChannelProvider, confirmWALProvider, dataPlaneRequestProcessor.asInstanceOf[ElasticKafkaApis], metadataCache, clientRackProvider, config)
       metadataLoader.installPublishers(util.List.of(zeroZoneRouter))
       zeroZoneRouter
     }

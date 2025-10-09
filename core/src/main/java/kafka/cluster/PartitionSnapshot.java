@@ -22,9 +22,13 @@ package kafka.cluster;
 import kafka.log.streamaspect.ElasticLogMeta;
 
 import org.apache.kafka.storage.internals.log.LogOffsetMetadata;
+import org.apache.kafka.storage.internals.log.TimestampOffset;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 
 public class PartitionSnapshot {
     private final int leaderEpoch;
@@ -32,14 +36,18 @@ public class PartitionSnapshot {
     private final LogOffsetMetadata firstUnstableOffset;
     private final LogOffsetMetadata logEndOffset;
     private final Map<Long, Long> streamEndOffsets;
+    private final TimestampOffset lastTimestampOffset;
+    private final CompletableFuture<Void> completeCf;
 
     public PartitionSnapshot(int leaderEpoch, ElasticLogMeta meta, LogOffsetMetadata firstUnstableOffset, LogOffsetMetadata logEndOffset,
-        Map<Long, Long> offsets) {
+        Map<Long, Long> offsets, TimestampOffset lastTimestampOffset, CompletableFuture<Void> completeCf) {
         this.leaderEpoch = leaderEpoch;
         this.logMeta = meta;
         this.firstUnstableOffset = firstUnstableOffset;
         this.logEndOffset = logEndOffset;
         this.streamEndOffsets = offsets;
+        this.lastTimestampOffset = lastTimestampOffset;
+        this.completeCf = completeCf;
     }
 
     public int leaderEpoch() {
@@ -62,6 +70,14 @@ public class PartitionSnapshot {
         return streamEndOffsets;
     }
 
+    public TimestampOffset lastTimestampOffset() {
+        return lastTimestampOffset;
+    }
+
+    public CompletableFuture<Void> completeCf() {
+        return completeCf;
+    }
+
     @Override
     public String toString() {
         return "PartitionSnapshot{" +
@@ -70,6 +86,7 @@ public class PartitionSnapshot {
             ", firstUnstableOffset=" + firstUnstableOffset +
             ", logEndOffset=" + logEndOffset +
             ", streamEndOffsets=" + streamEndOffsets +
+            ", lastTimestampOffset=" + lastTimestampOffset +
             '}';
     }
 
@@ -78,11 +95,14 @@ public class PartitionSnapshot {
     }
 
     public static class Builder {
+        private static final int DEFAULT_STREAM_COUNT = 4;
         private int leaderEpoch;
         private ElasticLogMeta logMeta;
         private LogOffsetMetadata firstUnstableOffset;
         private LogOffsetMetadata logEndOffset;
-        private final Map<Long, Long> streamEndOffsets = new HashMap<>();
+        private final Map<Long, Long> streamEndOffsets = new HashMap<>(DEFAULT_STREAM_COUNT);
+        private final List<CompletableFuture<?>> streamLastAppendFutures = new ArrayList<>(DEFAULT_STREAM_COUNT);
+        private TimestampOffset lastTimestampOffset;
 
         public Builder leaderEpoch(int leaderEpoch) {
             this.leaderEpoch = leaderEpoch;
@@ -109,8 +129,21 @@ public class PartitionSnapshot {
             return this;
         }
 
+        public Builder lastTimestampOffset(TimestampOffset lastTimestampOffset) {
+            this.lastTimestampOffset = lastTimestampOffset;
+            return this;
+        }
+
+        public Builder addStreamLastAppendFuture(CompletableFuture<?> future) {
+            if (future != null) {
+                streamLastAppendFutures.add(future);
+            }
+            return this;
+        }
+
         public PartitionSnapshot build() {
-            return new PartitionSnapshot(leaderEpoch, logMeta, firstUnstableOffset, logEndOffset, streamEndOffsets);
+            CompletableFuture<Void> doneCf = CompletableFuture.allOf(streamLastAppendFutures.toArray(new CompletableFuture<?>[0])).exceptionally(ex -> null);
+            return new PartitionSnapshot(leaderEpoch, logMeta, firstUnstableOffset, logEndOffset, streamEndOffsets, lastTimestampOffset, doneCf);
         }
     }
 }

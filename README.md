@@ -1,4 +1,4 @@
-# AutoMQ: A stateless Kafka® on S3, offering 10x cost savings and scaling in seconds.
+# A Diskless Kafka® on S3, Offering 10x Cost Savings and Scaling in Seconds.
 
 <div align="center">
 <p align="center">
@@ -22,40 +22,41 @@
 <a href="https://trendshift.io/repositories/9782" target="_blank"><img src="https://trendshift.io/api/badge/repositories/9782" alt="AutoMQ%2Fautomq | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 </div>
 
-## 👥 Big Companies Worldwide are Using AutoMQ
-> Here are some of our customers worldwide using AutoMQ.
-
+<div align="center">
+    
+<img width="97%" alt="automq-solgan" src="https://github.com/user-attachments/assets/97fcde87-19ef-42a9-9835-01b63516d497" />
 
 <a href="https://www.youtube.com/watch?v=IB8sh639Rsg" target="_blank">
-    <img alt="Grab" src="https://github.com/user-attachments/assets/dc32f584-fa62-4805-9cef-bad9902b7473" width="18%" />
+    <img alt="Grab" src="https://github.com/user-attachments/assets/01668da4-3916-4f49-97af-18f91b25f8c1" width="19%" />
 </a> 
 <a href="https://www.automq.com/blog/jdcom-automq-cubefs-trillion-scale-kafka-messaging" target="_blank">
-    <img alt="JD" src="https://github.com/user-attachments/assets/fa680ea0-a078-419d-8ccd-01595732cfdf" width="18%" />
+    <img alt="JD" src="https://github.com/user-attachments/assets/a7a86d2c-66fa-4575-b181-6cf56a31f880" width="19%" />
 </a> 
 <a href="https://www.automq.com/blog/automq-help-geely-auto-solve-the-pain-points-of-kafka-elasticity-in-the-v2x-scenario" target="_blank">
-    <img alt="image" src="https://github.com/user-attachments/assets/7e6df0f2-e79d-4d97-a4fc-fb50774fd2dd" width="18%" />
+    <img alt="Geely" src="https://github.com/user-attachments/assets/d61f7c51-0d80-4290-a428-a941441c7ec9" width="19%" />
 </a>
 <a href="https://www.automq.com/blog/dewu-builds-trillion-level-monitoring-system-based-on-automq" target="_blank">
-    <img alt="Poizon" src="https://github.com/user-attachments/assets/a4d46a21-9b9d-4a95-88fd-e123b8f35063" width="18%" />
+    <img alt="Poizon" src="https://github.com/user-attachments/assets/45f4c642-0495-4bcc-9224-d2c5c2b2f0d5" width="19%" />
 </a> 
 <a href="https://www.automq.com/customer" target="_blank">
-    <img alt="bitkub" src="https://github.com/user-attachments/assets/743dff96-f18c-4f2a-b9fe-5e90c1d03beb" width="18%" />
+    <img alt="Bitkub" src="https://github.com/user-attachments/assets/3b95cd26-973d-4405-9d2c-289c5807bb39" width="19%" />
 </a> 
 <a href="https://www.automq.com/customer" target="_blank">
-    <img alt="PalmPay" src="https://github.com/user-attachments/assets/471732df-bacd-4041-ad99-024306167f60" width="18%" />
+    <img alt="PalmPay" src="https://github.com/user-attachments/assets/b22f70f5-7553-4283-ac20-f034868b0121" width="19%" />
 </a> 
 <a href="https://www.automq.com/blog/automq-vs-kafka-evaluation-and-comparison-by-little-red-book" target="_blank">
-    <img alt="RedNote" src="https://github.com/user-attachments/assets/b7fdcda3-7670-44db-9311-6d1dd45e134b" width="18%" />
+    <img alt="RedNote" src="https://github.com/user-attachments/assets/4a62f1f3-e171-4d58-9d7e-ebabad6f8e23" width="19%" />
 </a> 
 <a href="https://www.automq.com/blog/xpeng-motors-reduces-costs-by-50-by-replacing-kafka-with-automq" target="_blank">
-    <img alt="XPENG" src="https://github.com/user-attachments/assets/4fbad4c3-d365-49dc-8dfa-ca4060a70b1a" width="18%" />
+    <img alt="XPENG" src="https://github.com/user-attachments/assets/8b32c484-a4bf-4793-80d0-f454da254337" width="19%" />
 </a> 
 <a href="https://www.automq.com/customer" target="_blank">
-    <img alt="OPPO" src="https://github.com/user-attachments/assets/ff7600fa-0776-4879-a3fd-3ad5d898e41c" width="18%" />
+    <img alt="OPPO" src="https://github.com/user-attachments/assets/2b6d3cf0-ae54-4073-bc06-c6623e31c6d0" width="19%" />
 </a> 
 <a href="https://www.automq.com/customer" target="_blank">
-    <img alt="BambuLab" src="https://github.com/user-attachments/assets/1a58f96e-df47-4a7e-b0fe-a0d51ea93586" width="18%" />
+    <img alt="BambuLab" src="https://github.com/user-attachments/assets/d09ded1b-3696-49ac-b38f-d02f9598b3bb" width="19%" />
 </a>
+</div>
 
 
 - [Grab: Driving Efficiency with AutoMQ in DataStreaming Platform](https://www.youtube.com/watch?v=IB8sh639Rsg)
@@ -74,7 +75,7 @@
 
 The `docker/docker-compose.yaml` file provides a simple single-node setup for quick evaluation and development:
 ```shell
-docker compose -f docker/docker-compose.yaml up -d
+curl -O https://raw.githubusercontent.com/AutoMQ/automq/refs/tags/1.5.5/docker/docker-compose.yaml && docker compose -f docker-compose.yaml up -d
 ```
 This setup features a single AutoMQ node serving as both controller and broker, alongside MinIO for S3 storage. All services operate within a Docker bridge network called `automq_net`, allowing you to start a Kafka producer in this network to test AutoMQ:
 ```shell
@@ -84,14 +85,14 @@ docker run --network automq_net automqinc/automq:latest /bin/bash -c \
 ```
 After testing, you can destroy the setup with:
 ```shell
-docker compose -f docker/docker-compose.yaml down
+docker compose -f docker-compose.yaml down
 ```
 The `docker/docker-compose-cluster.yaml` file offers a more complex setup with three AutoMQ nodes, ideal for testing AutoMQ's cluster features, and can be run in the same way.
 
 There are more deployment options available:
-- [Deploy on Linux with 5 Nodes](https://www.automq.com/docs/automq/getting-started/cluster-deployment-on-linux?utm_source=github_automq)
-- [Deploy on Kubernetes](https://www.automq.com/docs/automq/getting-started/cluster-deployment-on-kubernetes?utm_source=github_automq)
-- [Run on Ceph / MinIO / CubeFS / HDFS](https://www.automq.com/docs/automq/deployment/overview?utm_source=github_automq)
+- [Deploy Multi-Nodes Test Cluster on Docker](https://www.automq.com/docs/automq/getting-started/deploy-multi-nodes-test-cluster-on-docker?utm_source=github_automq)
+- [Deploy on Linux with 5 Nodes](https://www.automq.com/docs/automq/deployment/deploy-multi-nodes-cluster-on-linux?utm_source=github_automq)
+- [Deploy on Kubernetes](https://www.automq.com/docs/automq/deployment/deploy-multi-nodes-cluster-on-kubernetes?utm_source=github_automq)
 - [Try AutoMQ on AWS Marketplace (Two Weeks Free Trial)](https://docs.automq.com/automq-cloud/getting-started/install-byoc-environment/aws/install-env-from-marketplace?utm_source=github_automq)
 - [Try AutoMQ on Alibaba Cloud Marketplace (Two Weeks Free Trial)](https://market.aliyun.com/products/55530001/cmgj00065841.html)
 

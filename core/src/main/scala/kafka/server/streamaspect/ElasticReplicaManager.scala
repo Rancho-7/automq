@@ -1,12 +1,15 @@
 package kafka.server.streamaspect
 
 import com.automq.stream.api.exceptions.FastReadFailFastException
+import com.automq.stream.s3.metrics.stats.NetworkStats
 import com.automq.stream.s3.metrics.{MetricsLevel, TimerUtil}
-import com.automq.stream.utils.FutureUtil
+import com.automq.stream.s3.network.{AsyncNetworkBandwidthLimiter, GlobalNetworkBandwidthLimiters, ThrottleStrategy}
+import com.automq.stream.utils.{FutureUtil, Systems}
 import com.automq.stream.utils.threads.S3StreamThreadPoolMonitor
 import kafka.automq.interceptor.{ClientIdKey, ClientIdMetadata, TrafficInterceptor}
 import kafka.automq.kafkalinking.KafkaLinkingManager
 import kafka.automq.partition.snapshot.PartitionSnapshotsManager
+import kafka.automq.zerozone.ZeroZoneThreadLocalContext
 import kafka.cluster.Partition
 import kafka.log.remote.RemoteLogManager
 import kafka.log.streamaspect.{ElasticLogManager, OpenHint, PartitionStatusTracker, ReadHint}
@@ -49,7 +52,7 @@ import scala.collection.mutable.ArrayBuffer
 import scala.collection.{Seq, mutable}
 import scala.compat.java8.OptionConverters
 import scala.compat.java8.OptionConverters.RichOptionalGeneric
-import scala.jdk.CollectionConverters.{CollectionHasAsScala, MapHasAsScala, SetHasAsJava}
+import scala.jdk.CollectionConverters.{CollectionHasAsScala, EnumerationHasAsScala, MapHasAsScala, SetHasAsJava}
 
 object ElasticReplicaManager {
   def emptyReadResults(partitions: Seq[TopicIdPartition]): Seq[(TopicIdPartition, LogReadResult)] = {
@@ -102,7 +105,7 @@ class ElasticReplicaManager(
   directoryEventHandler) {
 
   partitionMetricsCleanerExecutor.scheduleAtFixedRate(() => {
-    brokerTopicStats.removeRedundantMetrics(allPartitions.keys)
+    brokerTopicStats.removeRedundantMetrics(allPartitions.keys ++ snapshotReadPartitions.keys.asScala)
   }, 1, 1, TimeUnit.HOURS)
 
   protected val openingPartitions = new ConcurrentHashMap[TopicPartition, CompletableFuture[Void]]()
@@ -122,8 +125,12 @@ class ElasticReplicaManager(
     fetchExecutorQueueSizeGaugeMap
   })
 
-  private val fastFetchLimiter = new FairLimiter(200 * 1024 * 1024, FETCH_LIMITER_FAST_NAME) // 200MiB
-  private val slowFetchLimiter = new FairLimiter(200 * 1024 * 1024, FETCH_LIMITER_SLOW_NAME) // 200MiB
+  private val fetchLimiterSize = Systems.getEnvInt("AUTOMQ_FETCH_LIMITER_SIZE",
+    // autoscale the fetch limiter size based on heap size, min 200MiB, max 1GiB, every 3GB heap add 100MiB limiter
+     Math.min(1024, 100 * Math.max(2, (Systems.HEAP_MEMORY_SIZE / (1024 * 1024 * 1024) / 3)).asInstanceOf[Int]) * 1024 * 1024
+  )
+  private val fastFetchLimiter = new FairLimiter(fetchLimiterSize, FETCH_LIMITER_FAST_NAME)
+  private val slowFetchLimiter = new FairLimiter(fetchLimiterSize, FETCH_LIMITER_SLOW_NAME)
   private val fetchLimiterWaitingTasksGaugeMap = new util.HashMap[String, Integer]()
   S3StreamKafkaMetricsManager.setFetchLimiterWaitingTaskNumSupplier(() => {
     fetchLimiterWaitingTasksGaugeMap.put(FETCH_LIMITER_FAST_NAME, fastFetchLimiter.waitingThreads())
@@ -191,7 +198,7 @@ class ElasticReplicaManager(
 
   private var kafkaLinkingManager = Option.empty[KafkaLinkingManager]
 
-  private val partitionSnapshotsManager = new PartitionSnapshotsManager(time)
+  private var partitionSnapshotsManager: PartitionSnapshotsManager = null
 
   private val snapshotReadPartitions = new ConcurrentHashMap[TopicPartition, Partition]()
 
@@ -246,10 +253,6 @@ class ElasticReplicaManager(
                 val start = System.currentTimeMillis()
                 hostedPartition.partition.close()
                 info(s"partition $topicPartition is closed, cost ${System.currentTimeMillis() - start} ms")
-                if (!metadataCache.autoMQVersion().isReassignmentV1Supported) {
-                  // TODO: https://github.com/AutoMQ/automq/issues/1153 add schedule check when leader isn't successfully set
-                  alterPartitionManager.tryElectLeader(topicPartition)
-                }
               } else {
                 // Logs are not deleted here. They are deleted in a single batch later on.
                 // This is done to avoid having to checkpoint for every deletions.
@@ -367,7 +370,6 @@ class ElasticReplicaManager(
 
     entriesPerPartition.map { case (topicPartition, records) =>
       brokerTopicStats.topicStats(topicPartition.topic).totalProduceRequestRate.mark()
-      brokerTopicStats.topicPartitionStats(topicPartition).totalProduceRequestRate.mark()
       brokerTopicStats.allTopicsStats.totalProduceRequestRate.mark()
 
       // reject appending to internal topics if it is not allowed
@@ -384,7 +386,7 @@ class ElasticReplicaManager(
           val numAppendedMessages = info.numMessages
 
           // update stats for successfully appended bytes and messages as bytesInRate and messageInRate
-          brokerTopicStats.topicPartitionStats(topicPartition).bytesInRate.mark(records.sizeInBytes())
+          brokerTopicStats.updatePartitionBytesIn(topicPartition, records.sizeInBytes())
           brokerTopicStats.topicStats(topicPartition.topic).bytesInRate.mark(records.sizeInBytes)
           brokerTopicStats.allTopicsStats.bytesInRate.mark(records.sizeInBytes)
           brokerTopicStats.topicStats(topicPartition.topic).messagesInRate.mark(numAppendedMessages)
@@ -506,7 +508,7 @@ class ElasticReplicaManager(
 
     logReadResults.foreach { case (topicIdPartition, logReadResult) =>
       brokerTopicStats.topicStats(topicIdPartition.topicPartition.topic).totalFetchRequestRate.mark()
-      brokerTopicStats.topicPartitionStats(topicIdPartition.topicPartition).totalFetchRequestRate.mark()
+      brokerTopicStats.updatePartitionFetchRequestRate(topicIdPartition.topicPartition())
       brokerTopicStats.allTopicsStats.totalFetchRequestRate.mark()
       if (logReadResult.error != Errors.NONE)
         errorReadingData = true
@@ -623,7 +625,7 @@ class ElasticReplicaManager(
     if (handler == null) {
       // the handler will be null if it timed out to acquire from limiter
       fetchLimiterTimeoutCounterMap.get(limiter.name).add(MetricsLevel.INFO, 1)
-      // warn(s"Returning emtpy fetch response for fetch request $readPartitionInfo since the wait time exceeds $timeoutMs ms.")
+      // warn(s"Returning empty fetch response for fetch request $readPartitionInfo since the wait time exceeds $timeoutMs ms.")
       ElasticReplicaManager.emptyReadResults(readPartitionInfo.map(_._1))
     } else {
       try {
@@ -889,14 +891,16 @@ class ElasticReplicaManager(
     }
 
     var partitionIndex = 0;
-    while (remainingBytes.get() > 0 && partitionIndex < readPartitionInfo.size) {
+    while (remainingBytes.get() > 0 && partitionIndex < readPartitionInfo.size && fastReadFastFail.get() == null) {
       // In each iteration, we read as many partitions as possible until we reach the maximum bytes limit.
       val readCfArray = readFutureBuffer.get()
       readCfArray.clear()
       var assignedBytes = 0 // The total bytes we have assigned to the read requests.
       val availableBytes = remainingBytes.get() // The remaining bytes we can assign to the read requests, used to control the following loop.
 
-      while (assignedBytes < availableBytes && partitionIndex < readPartitionInfo.size) {
+      while (assignedBytes < availableBytes && partitionIndex < readPartitionInfo.size
+        // When there is a fast read exception, quit the loop earlier.
+        && fastReadFastFail.get() == null) {
         // Iterate over the partitions.
         val tp = readPartitionInfo(partitionIndex)._1
         val partitionData = readPartitionInfo(partitionIndex)._2
@@ -971,7 +975,16 @@ class ElasticReplicaManager(
       release()
       throw fastReadFastFail.get()
     }
+    acquireNetworkOutPermit(limitBytes - remainingBytes.get(), if (ReadHint.isFastRead) ThrottleStrategy.TAIL else ThrottleStrategy.CATCH_UP)
     result
+  }
+
+  private def acquireNetworkOutPermit(size: Int, throttleStrategy: ThrottleStrategy): Unit = {
+    val start = time.nanoseconds()
+    GlobalNetworkBandwidthLimiters.instance().get(AsyncNetworkBandwidthLimiter.Type.OUTBOUND)
+      .consume(throttleStrategy, size).join()
+    val networkStats = NetworkStats.getInstance()
+    networkStats.networkLimiterQueueTimeStats(AsyncNetworkBandwidthLimiter.Type.OUTBOUND, throttleStrategy).record(time.nanoseconds() - start)
   }
 
   def handlePartitionFailure(partitionDir: String): Unit = {
@@ -1383,7 +1396,6 @@ class ElasticReplicaManager(
     }
     partitionOpenOpExecutor.shutdown()
     partitionCloseOpExecutor.shutdown()
-    CoreUtils.swallow(ElasticLogManager.shutdown(), this)
   }
 
   /**
@@ -1427,7 +1439,7 @@ class ElasticReplicaManager(
       transactionWaitingForValidationMap.computeIfAbsent(producerId, _ => {
         Verification(
           new AtomicBoolean(false),
-          new ArrayBlockingQueue[TransactionVerificationRequest](5),
+          new LinkedBlockingQueue[TransactionVerificationRequest](),
           new AtomicLong(time.milliseconds()))
       })
     } else {
@@ -1455,24 +1467,30 @@ class ElasticReplicaManager(
     verification: Verification,
     callback: (RequestLocal, T) => Unit,
   ): (RequestLocal, T) => Unit = {
+    val writeContext = ZeroZoneThreadLocalContext.writeContext().detach()
     (requestLocal, args) => {
       try {
+        // The thread switch, so we need to attach the write context to the current thread.
+        ZeroZoneThreadLocalContext.attach(writeContext)
         callback(requestLocal, args)
       } catch {
         case e: Throwable =>
           error("Error in transaction verification callback", e)
       }
       if (verification != null) {
+        var request: TransactionVerificationRequest = null
         verification.synchronized {
           verification.timestamp.set(time.milliseconds())
           if (!verification.waitingRequests.isEmpty) {
             // Since the callback thread and task thread may be different, we need to ensure that the tasks are executed sequentially.
-            val request = verification.waitingRequests.poll()
-            request.task()
+            request = verification.waitingRequests.poll()
           } else {
             // If there are no tasks in the queue, set hasInflight to false
             verification.hasInflight.set(false)
           }
+        }
+        if (request != null) {
+          request.task()
         }
         val lastCleanTimestamp = lastTransactionCleanTimestamp.get();
         val now = time.milliseconds()
@@ -1490,7 +1508,7 @@ class ElasticReplicaManager(
     }
   }
 
-  def handleGetPartitionSnapshotRequest(request: AutomqGetPartitionSnapshotRequest): AutomqGetPartitionSnapshotResponse = {
+  def handleGetPartitionSnapshotRequest(request: AutomqGetPartitionSnapshotRequest): CompletableFuture[AutomqGetPartitionSnapshotResponse] = {
     partitionSnapshotsManager.handle(request)
   }
 
@@ -1500,7 +1518,13 @@ class ElasticReplicaManager(
 
   def computeSnapshotReadPartition(topicPartition: TopicPartition,
     remappingFunction: BiFunction[TopicPartition, Partition, Partition]): Partition = {
-    snapshotReadPartitions.compute(topicPartition, remappingFunction)
+    snapshotReadPartitions.compute(topicPartition, (tp, partition) => {
+      val newPartition = remappingFunction.apply(tp, partition)
+      if (newPartition == null) {
+        brokerTopicStats.removeMetrics(tp)
+      }
+      newPartition
+    })
   }
 
   def newSnapshotReadPartition(topicIdPartition: TopicIdPartition): Partition = {
@@ -1535,6 +1559,10 @@ class ElasticReplicaManager(
 
   def setTrafficInterceptor(trafficInterceptor: TrafficInterceptor): Unit = {
     this.trafficInterceptor = trafficInterceptor
+  }
+
+  def setS3StreamContext(ctx: com.automq.stream.Context): Unit = {
+    this.partitionSnapshotsManager = new PartitionSnapshotsManager(time, config.automq, ctx.confirmWAL(), () => metadataCache.autoMQVersion())
   }
 
 }

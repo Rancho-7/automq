@@ -80,10 +80,11 @@ public class MemoryClient implements Client {
         return FutureUtil.failedFuture(new UnsupportedOperationException());
     }
 
-    static class StreamImpl implements Stream {
+    public static class StreamImpl implements Stream {
         private final AtomicLong nextOffsetAlloc = new AtomicLong();
         private NavigableMap<Long, RecordBatchWithContext> recordMap = new ConcurrentSkipListMap<>();
         private final long streamId;
+        private volatile CompletableFuture<AppendResult> lastAppendFuture;
 
         public StreamImpl(long streamId) {
             this.streamId = streamId;
@@ -110,6 +111,11 @@ public class MemoryClient implements Client {
         }
 
         @Override
+        public void confirmOffset(long offset) {
+            nextOffsetAlloc.set(offset);
+        }
+
+        @Override
         public long nextOffset() {
             return nextOffsetAlloc.get();
         }
@@ -122,7 +128,8 @@ public class MemoryClient implements Client {
             copy.flip();
             recordBatch = new DefaultRecordBatch(recordBatch.count(), recordBatch.baseTimestamp(), recordBatch.properties(), copy);
             recordMap.put(baseOffset, new RecordBatchWithContextWrapper(recordBatch, baseOffset));
-            return CompletableFuture.completedFuture(() -> baseOffset);
+            this.lastAppendFuture = CompletableFuture.completedFuture(() -> baseOffset);
+            return lastAppendFuture;
         }
 
         @Override
@@ -132,9 +139,25 @@ public class MemoryClient implements Client {
             if (floorKey == null) {
                 return CompletableFuture.completedFuture(ArrayList::new);
             }
-            List<RecordBatchWithContext> records = new ArrayList<>(recordMap.subMap(floorKey, endOffset).values());
+            NavigableMap<Long, RecordBatchWithContext> subMap = recordMap.subMap(floorKey, true, endOffset, false);
+            List<RecordBatchWithContext> records = new ArrayList<>();
+            int accumulatedSize = 0;
+            for (Map.Entry<Long, RecordBatchWithContext> entry : subMap.entrySet()) {
+                RecordBatchWithContext batch = entry.getValue();
+                int batchSize = batch.rawPayload().remaining();
+                if (accumulatedSize + batchSize > maxSizeHint && !records.isEmpty()) {
+                    break;
+                }
+                records.add(batch);
+                accumulatedSize += batchSize;
+
+                if (accumulatedSize > maxSizeHint) {
+                    break;
+                }
+            }
             return CompletableFuture.completedFuture(() -> records);
         }
+
 
         @Override
         public CompletableFuture<Void> trim(long newStartOffset) {
@@ -151,6 +174,11 @@ public class MemoryClient implements Client {
         public CompletableFuture<Void> destroy() {
             recordMap.clear();
             return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletableFuture<AppendResult> lastAppendFuture() {
+            return lastAppendFuture;
         }
     }
 

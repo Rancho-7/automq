@@ -118,6 +118,11 @@ public class MetaStream implements Stream {
     }
 
     @Override
+    public void confirmOffset(long offset) {
+        innerStream.confirmOffset(offset);
+    }
+
+    @Override
     public long nextOffset() {
         return innerStream.nextOffset();
     }
@@ -189,6 +194,11 @@ public class MetaStream implements Stream {
             compactionFuture.cancel(true);
         }
         return innerStream.destroy();
+    }
+
+    @Override
+    public CompletableFuture<AppendResult> lastAppendFuture() {
+        return innerStream.lastAppendFuture();
     }
 
     /**

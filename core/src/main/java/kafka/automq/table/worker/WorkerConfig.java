@@ -22,7 +22,11 @@ package kafka.automq.table.worker;
 import kafka.cluster.Partition;
 import kafka.log.UnifiedLog;
 
+import org.apache.kafka.common.config.TopicConfig;
+import org.apache.kafka.server.record.ErrorsTolerance;
+import org.apache.kafka.server.record.TableTopicConvertType;
 import org.apache.kafka.server.record.TableTopicSchemaType;
+import org.apache.kafka.server.record.TableTopicTransformType;
 import org.apache.kafka.storage.internals.log.LogConfig;
 
 import java.util.List;
@@ -53,9 +57,38 @@ public class WorkerConfig {
         return config.tableTopicSchemaType;
     }
 
+    public TableTopicConvertType valueConvertType() {
+        return config.valueConvertType;
+    }
+    public TableTopicConvertType keyConvertType() {
+        return config.keyConvertType;
+    }
+
+    public String valueSubject() {
+        return config.getString(TopicConfig.AUTOMQ_TABLE_TOPIC_CONVERT_VALUE_BY_LATEST_SCHEMA_SUBJECT_CONFIG);
+    }
+
+    public String valueMessageFullName() {
+        return config.getString(TopicConfig.AUTOMQ_TABLE_TOPIC_CONVERT_VALUE_BY_LATEST_SCHEMA_MESSAGE_FULL_NAME_CONFIG);
+    }
+
+    public String keySubject() {
+        return config.getString(TopicConfig.AUTOMQ_TABLE_TOPIC_CONVERT_KEY_BY_LATEST_SCHEMA_SUBJECT_CONFIG);
+    }
+
+    public String keyMessageFullName() {
+        return config.getString(TopicConfig.AUTOMQ_TABLE_TOPIC_CONVERT_KEY_BY_LATEST_SCHEMA_MESSAGE_FULL_NAME_CONFIG);
+    }
+
+    public TableTopicTransformType transformType() {
+        return config.transformType;
+    }
+
+
     public long incrementSyncThreshold() {
         return 32 * 1024 * 1024;
     }
+
 
     public int microSyncBatchSize() {
         return 32 * 1024 * 1024;
@@ -81,6 +114,10 @@ public class WorkerConfig {
 
     public String cdcField() {
         return config.tableTopicCdcField;
+    }
+
+    public ErrorsTolerance errorsTolerance() {
+        return config.errorsTolerance;
     }
 
     public void refresh() {

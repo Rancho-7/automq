@@ -34,7 +34,10 @@ import com.automq.stream.s3.model.StreamRecordBatch;
 import com.automq.stream.s3.objects.ObjectManager;
 import com.automq.stream.utils.FutureUtil;
 import com.automq.stream.utils.LogSuppressor;
+import com.automq.stream.utils.Systems;
+import com.automq.stream.utils.Time;
 import com.automq.stream.utils.threads.EventLoop;
+import com.automq.stream.utils.threads.EventLoopSafe;
 import com.google.common.annotations.VisibleForTesting;
 
 import org.slf4j.Logger;
@@ -62,7 +65,7 @@ import static com.automq.stream.utils.FutureUtil.exec;
     public static final int GET_OBJECT_STEP = 4;
     private static final Logger LOGGER = LoggerFactory.getLogger(StreamReader.class);
     static final int READAHEAD_SIZE_UNIT = 1024 * 1024 / 2;
-    private static final int MAX_READAHEAD_SIZE = 32 * 1024 * 1024;
+    private static final int MAX_READAHEAD_SIZE = Systems.getEnvInt("AUTOMQ_MAX_READAHEAD_SIZE", 32 * 1024 * 1024);
     private static final long READAHEAD_RESET_COLD_DOWN_MILLS = TimeUnit.MINUTES.toMillis(1);
     private static final long READAHEAD_AVAILABLE_BYTES_THRESHOLD = 32L * 1024 * 1024;
     private static final LogSuppressor READAHEAD_RESET_LOG_SUPPRESSOR = new LogSuppressor(LOGGER, 30000);
@@ -80,19 +83,27 @@ import static com.automq.stream.utils.FutureUtil.exec;
     private final ObjectManager objectManager;
     private final ObjectReaderFactory objectReaderFactory;
     private final DataBlockCache dataBlockCache;
+    private final Time time;
     long nextReadOffset;
     private CompletableFuture<Void> inflightLoadIndexCf;
     private volatile CompletableFuture<Void> afterReadTryReadaheadCf;
-    private long lastAccessTimestamp = System.currentTimeMillis();
+    private long lastAccessTimestamp;
     private boolean reading = false;
 
     private boolean closed = false;
 
     public StreamReader(long streamId, long nextReadOffset, EventLoop eventLoop, ObjectManager objectManager,
         ObjectReaderFactory objectReaderFactory, DataBlockCache dataBlockCache) {
+        this(streamId, nextReadOffset, eventLoop, objectManager, objectReaderFactory, dataBlockCache, Time.SYSTEM);
+    }
+
+    public StreamReader(long streamId, long nextReadOffset, EventLoop eventLoop, ObjectManager objectManager,
+        ObjectReaderFactory objectReaderFactory, DataBlockCache dataBlockCache, Time time) {
         this.streamId = streamId;
         this.nextReadOffset = nextReadOffset;
         this.readahead = new Readahead();
+        this.time = time;
+        this.lastAccessTimestamp = time.milliseconds();
 
         this.eventLoop = eventLoop;
         this.objectManager = objectManager;
@@ -117,7 +128,7 @@ import static com.automq.stream.utils.FutureUtil.exec;
     }
 
     CompletableFuture<ReadDataBlock> read(long startOffset, long endOffset, int maxBytes, int leftRetries) {
-        lastAccessTimestamp = System.currentTimeMillis();
+        lastAccessTimestamp = time.milliseconds();
         ReadContext readContext = new ReadContext();
         read0(readContext, startOffset, endOffset, maxBytes);
         CompletableFuture<ReadDataBlock> retCf = new CompletableFuture<>();
@@ -617,7 +628,7 @@ import static com.automq.stream.utils.FutureUtil.exec;
         private int cacheMissCount;
 
         public void tryReadahead(boolean cacheMiss) {
-            if (System.currentTimeMillis() - resetTimestamp < READAHEAD_RESET_COLD_DOWN_MILLS) {
+            if (time.milliseconds() - resetTimestamp < READAHEAD_RESET_COLD_DOWN_MILLS) {
                 // skip readahead when readahead is in cold down
                 return;
             }
@@ -660,7 +671,7 @@ import static com.automq.stream.utils.FutureUtil.exec;
 
         public void reset() {
             requireReset = true;
-            resetTimestamp = System.currentTimeMillis();
+            resetTimestamp = time.milliseconds();
         }
     }
 

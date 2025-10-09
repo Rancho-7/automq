@@ -19,6 +19,7 @@
 
 package kafka.automq.partition.snapshot;
 
+import kafka.automq.AutoMQConfig;
 import kafka.cluster.LogEventListener;
 import kafka.cluster.Partition;
 import kafka.cluster.PartitionListener;
@@ -39,8 +40,11 @@ import org.apache.kafka.common.message.AutomqGetPartitionSnapshotResponseData.To
 import org.apache.kafka.common.requests.s3.AutomqGetPartitionSnapshotRequest;
 import org.apache.kafka.common.requests.s3.AutomqGetPartitionSnapshotResponse;
 import org.apache.kafka.common.utils.Time;
+import org.apache.kafka.server.common.automq.AutoMQVersion;
 import org.apache.kafka.storage.internals.log.LogOffsetMetadata;
+import org.apache.kafka.storage.internals.log.TimestampOffset;
 
+import com.automq.stream.s3.ConfirmWAL;
 import com.automq.stream.utils.Threads;
 
 import java.util.ArrayList;
@@ -48,20 +52,37 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
+
+import io.netty.util.concurrent.FastThreadLocal;
 
 public class PartitionSnapshotsManager {
     private static final int NOOP_SESSION_ID = 0;
     private final Map<Integer, Session> sessions = new HashMap<>();
     private final List<PartitionWithVersion> snapshotVersions = new CopyOnWriteArrayList<>();
     private final Time time;
+    private final String confirmWalConfig;
+    private final ConfirmWAL confirmWAL;
 
-    public PartitionSnapshotsManager(Time time) {
+    public PartitionSnapshotsManager(Time time, AutoMQConfig config, ConfirmWAL confirmWAL, Supplier<AutoMQVersion> versionGetter) {
         this.time = time;
-        Threads.COMMON_SCHEDULER.scheduleWithFixedDelay(this::cleanExpiredSessions, 1, 1, TimeUnit.MINUTES);
+        this.confirmWalConfig = config.walConfig();
+        this.confirmWAL = confirmWAL;
+        if (config.zoneRouterChannels().isPresent()) {
+            Threads.COMMON_SCHEDULER.scheduleWithFixedDelay(this::cleanExpiredSessions, 1, 1, TimeUnit.MINUTES);
+            Threads.COMMON_SCHEDULER.scheduleWithFixedDelay(() -> {
+                // In ZERO_ZONE_V0 we need to fast commit the WAL data to KRaft,
+                // then another nodes could replay the SSO to support snapshot read.
+                if (!versionGetter.get().isZeroZoneV2Supported()) {
+                    confirmWAL.commit(0, false);
+                }
+            }, 1, 1, TimeUnit.SECONDS);
+        }
     }
 
     public void onPartitionOpen(Partition partition) {
@@ -78,7 +99,7 @@ public class PartitionSnapshotsManager {
         }
     }
 
-    public AutomqGetPartitionSnapshotResponse handle(AutomqGetPartitionSnapshotRequest request) {
+    public CompletableFuture<AutomqGetPartitionSnapshotResponse> handle(AutomqGetPartitionSnapshotRequest request) {
         Session session;
         synchronized (this) {
             AutomqGetPartitionSnapshotRequestData requestData = request.data();
@@ -96,7 +117,9 @@ public class PartitionSnapshotsManager {
                 sessions.put(sessionId, session);
             }
         }
-        return session.snapshotsDelta();
+        CompletableFuture<AutomqGetPartitionSnapshotResponse> resp = session.snapshotsDelta(request.data().version());
+        CompletableFuture<Void> commitCf = request.data().requestCommit() ? confirmWAL.commit(0, false) : CompletableFuture.completedFuture(null);
+        return commitCf.exceptionally(nil -> null).thenCompose(nil -> resp);
     }
 
     private synchronized int nextSessionId() {
@@ -113,6 +136,13 @@ public class PartitionSnapshotsManager {
     }
 
     class Session {
+        private static final short ZERO_ZONE_V0_REQUEST_VERSION = (short) 0;
+        private static final FastThreadLocal<List<CompletableFuture<Void>>> COMPLETE_CF_LIST_LOCAL = new FastThreadLocal<>() {
+            @Override
+            protected List<CompletableFuture<Void>> initialValue() {
+                return new ArrayList<>();
+            }
+        };
         private final int sessionId;
         private int sessionEpoch = 0;
         private final Map<Partition, PartitionSnapshotVersion> synced = new HashMap<>();
@@ -127,18 +157,20 @@ public class PartitionSnapshotsManager {
             return sessionEpoch;
         }
 
-        public synchronized AutomqGetPartitionSnapshotResponse snapshotsDelta() {
+        public synchronized CompletableFuture<AutomqGetPartitionSnapshotResponse> snapshotsDelta(short requestVersion) {
             AutomqGetPartitionSnapshotResponseData resp = new AutomqGetPartitionSnapshotResponseData();
             sessionEpoch++;
             resp.setSessionId(sessionId);
             resp.setSessionEpoch(sessionEpoch);
             Map<Uuid, List<PartitionSnapshot>> topic2partitions = new HashMap<>();
 
+            List<CompletableFuture<Void>> completeCfList = COMPLETE_CF_LIST_LOCAL.get();
+            completeCfList.clear();
             removed.forEach(partition -> {
                 PartitionSnapshotVersion version = synced.remove(partition);
                 if (version != null) {
                     List<PartitionSnapshot> partitionSnapshots = topic2partitions.computeIfAbsent(partition.topicId().get(), topic -> new ArrayList<>());
-                    partitionSnapshots.add(snapshot(partition, version, null));
+                    partitionSnapshots.add(snapshot(partition, version, null, completeCfList));
                 }
             });
             removed.clear();
@@ -148,7 +180,7 @@ public class PartitionSnapshotsManager {
                 if (!Objects.equals(p.version, oldVersion)) {
                     List<PartitionSnapshot> partitionSnapshots = topic2partitions.computeIfAbsent(p.partition.topicId().get(), topic -> new ArrayList<>());
                     PartitionSnapshotVersion newVersion = p.version.copy();
-                    PartitionSnapshot partitionSnapshot = snapshot(p.partition, oldVersion, newVersion);
+                    PartitionSnapshot partitionSnapshot = snapshot(p.partition, oldVersion, newVersion, completeCfList);
                     partitionSnapshots.add(partitionSnapshot);
                     synced.put(p.partition, newVersion);
                 }
@@ -162,7 +194,20 @@ public class PartitionSnapshotsManager {
             });
             resp.setTopics(topics);
             lastGetSnapshotsTimestamp = time.milliseconds();
-            return new AutomqGetPartitionSnapshotResponse(resp);
+            long finalSessionEpoch = sessionEpoch;
+            CompletableFuture<AutomqGetPartitionSnapshotResponse> retCf = CompletableFuture.allOf(completeCfList.toArray(new CompletableFuture[0]))
+                .thenApply(nil -> {
+                    if (requestVersion > ZERO_ZONE_V0_REQUEST_VERSION) {
+                        if (finalSessionEpoch == 1) {
+                            // return the WAL config in the session first response
+                            resp.setConfirmWalConfig(confirmWalConfig);
+                        }
+                        resp.setConfirmWalEndOffset(confirmWAL.confirmOffset().bufferAsBytes());
+                    }
+                    return new AutomqGetPartitionSnapshotResponse(resp);
+                });
+            completeCfList.clear();
+            return retCf;
         }
 
         public synchronized void onPartitionClose(Partition partition) {
@@ -174,7 +219,7 @@ public class PartitionSnapshotsManager {
         }
 
         private PartitionSnapshot snapshot(Partition partition, PartitionSnapshotVersion oldVersion,
-            PartitionSnapshotVersion newVersion) {
+            PartitionSnapshotVersion newVersion, List<CompletableFuture<Void>> completeCfList) {
             if (newVersion == null) {
                 // partition is closed
                 PartitionSnapshot snapshot = new PartitionSnapshot();
@@ -188,6 +233,7 @@ public class PartitionSnapshotsManager {
                 PartitionSnapshot snapshot = new PartitionSnapshot();
                 snapshot.setPartitionIndex(partition.partitionId());
                 kafka.cluster.PartitionSnapshot src = partition.snapshot();
+                completeCfList.add(src.completeCf());
                 snapshot.setLeaderEpoch(src.leaderEpoch());
                 SnapshotOperation operation = oldVersion == null ? SnapshotOperation.ADD : SnapshotOperation.PATCH;
                 snapshot.setOperation(operation.code());
@@ -201,6 +247,7 @@ public class PartitionSnapshotsManager {
                 if (includeSegments) {
                     snapshot.setLogMetadata(logMetadata(src.logMeta()));
                 }
+                snapshot.setLastTimestampOffset(timestampOffset(src.lastTimestampOffset()));
                 return snapshot;
             });
         }
@@ -254,6 +301,11 @@ public class PartitionSnapshotsManager {
         return new AutomqGetPartitionSnapshotResponseData.TimestampOffsetData().setTimestamp(src.timestamp()).setOffset(src.offset());
     }
 
+    static AutomqGetPartitionSnapshotResponseData.TimestampOffsetData timestampOffset(
+        TimestampOffset src) {
+        return new AutomqGetPartitionSnapshotResponseData.TimestampOffsetData().setTimestamp(src.timestamp).setOffset(src.offset);
+    }
+
     static class PartitionWithVersion {
         Partition partition;
         PartitionSnapshotVersion version;
@@ -267,16 +319,13 @@ public class PartitionSnapshotsManager {
     static PartitionListener newPartitionListener(PartitionWithVersion version) {
         return new PartitionListener() {
             @Override
-            public void onHighWatermarkUpdated(TopicPartition partition, long offset) {
+            public void onNewLeaderEpoch(long oldEpoch, long newEpoch) {
                 version.version.incrementRecordsVersion();
             }
 
             @Override
-            public void onFailed(TopicPartition partition) {
-            }
-
-            @Override
-            public void onDeleted(TopicPartition partition) {
+            public void onNewAppend(TopicPartition partition, long offset) {
+                version.version.incrementRecordsVersion();
             }
         };
     }

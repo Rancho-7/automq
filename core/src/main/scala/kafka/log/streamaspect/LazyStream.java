@@ -115,6 +115,11 @@ public class LazyStream implements Stream {
     }
 
     @Override
+    public void confirmOffset(long offset) {
+        inner.confirmOffset(offset);
+    }
+
+    @Override
     public long nextOffset() {
         return inner.nextOffset();
     }
@@ -152,6 +157,11 @@ public class LazyStream implements Stream {
     @Override
     public CompletableFuture<Void> destroy() {
         return inner.destroy();
+    }
+
+    @Override
+    public CompletableFuture<AppendResult> lastAppendFuture() {
+        return inner.lastAppendFuture();
     }
 
     @Override
@@ -200,6 +210,10 @@ public class LazyStream implements Stream {
         }
 
         @Override
+        public void confirmOffset(long offset) {
+        }
+
+        @Override
         public long nextOffset() {
             return 0;
         }
@@ -227,6 +241,11 @@ public class LazyStream implements Stream {
         @Override
         public CompletableFuture<Void> destroy() {
             return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public CompletableFuture<AppendResult> lastAppendFuture() {
+            return null;
         }
     }
 }

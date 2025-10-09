@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Single-node AutoMQ setup with MinIO for quick starts
+# AutoMQ Cluster setup with MinIO for quick starts
 version: "3.8"
 
 x-common-variables: &common-env
@@ -58,8 +58,8 @@ services:
       /usr/bin/mc rm -r --force minio/automq-ops;
       /usr/bin/mc mb minio/automq-data;
       /usr/bin/mc mb minio/automq-ops;
-      /usr/bin/mc policy set public minio/automq-data;
-      /usr/bin/mc policy set public minio/automq-ops;
+      /usr/bin/mc anonymous set public minio/automq-data;
+      /usr/bin/mc anonymous set public minio/automq-ops;
       tail -f /dev/null
       "
     networks:
