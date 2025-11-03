@@ -81,6 +81,9 @@ import io.netty.buffer.Unpooled;
         this.topicNameGetter = topicNameGetter;
         this.eventLoop = eventLoop;
         this.time = time;
+    }
+
+    public void start() {
         request();
     }
 
@@ -126,7 +129,11 @@ import io.netty.buffer.Unpooled;
         AutomqGetPartitionSnapshotRequest.Builder builder = new AutomqGetPartitionSnapshotRequest.Builder(data);
         asyncSender.sendRequest(node, builder)
             .thenAcceptAsync(rst -> {
-                handleResponse(rst, snapshotCf);
+                try {
+                    handleResponse(rst, snapshotCf);
+                } catch (Exception e) {
+                    subscriber.reset("Exception when handle snapshot response: " + e.getMessage());
+                }
                 subscriber.unsafeRun();
             }, eventLoop)
             .exceptionally(ex -> {
@@ -170,7 +177,11 @@ import io.netty.buffer.Unpooled;
         if (sessionId != 0 && resp.sessionId() != sessionId) {
             // switch to a new session
             subscriber.reset(String.format("switch sessionId from %s to %s", sessionId, resp.sessionId()));
+            // reset immediately to the new session.
+            tryReset0();
         }
+        sessionId = resp.sessionId();
+        sessionEpoch = resp.sessionEpoch();
         SnapshotReadPartitionsManager.OperationBatch batch = new SnapshotReadPartitionsManager.OperationBatch();
         resp.topics().forEach(topic -> topic.partitions().forEach(partition -> {
             String topicName = topicNameGetter.apply(topic.topicId());
@@ -190,8 +201,6 @@ import io.netty.buffer.Unpooled;
         subscriber.onNewWalEndOffset(resp.confirmWalConfig(), DefaultRecordOffset.of(Unpooled.wrappedBuffer(resp.confirmWalEndOffset())));
         batch.operations.add(SnapshotWithOperation.snapshotMark(snapshotCf));
         subscriber.onNewOperationBatch(batch);
-        sessionId = resp.sessionId();
-        sessionEpoch = resp.sessionEpoch();
     }
 
     private boolean tryReset0() {

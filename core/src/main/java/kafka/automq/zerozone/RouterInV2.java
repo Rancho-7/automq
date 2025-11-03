@@ -117,7 +117,9 @@ public class RouterInV2 implements NonBlockingLocalRouterHandler {
             partitionProduceRequest.unpackLinkCf = routerChannel.get(channelOffset);
             unpackLinkQueue.add(partitionProduceRequest);
             partitionProduceRequest.unpackLinkCf.whenComplete((rst, ex) -> {
-                size.addAndGet(rst.readableBytes());
+                if (ex != null) {
+                    size.addAndGet(rst.readableBytes());
+                }
                 handleUnpackLink();
                 ZeroZoneMetricsManager.GET_CHANNEL_LATENCY.record(time.nanoseconds() - startNanos);
             });
@@ -141,7 +143,8 @@ public class RouterInV2 implements NonBlockingLocalRouterHandler {
                 if (req.unpackLinkCf.isDone()) {
                     EventLoop eventLoop = appendEventLoops[Math.abs(req.channelOffset.orderHint() % appendEventLoops.length)];
                     req.unpackLinkCf.thenComposeAsync(buf -> {
-                        try (ZoneRouterProduceRequest zoneRouterProduceRequest = ZoneRouterPackReader.decodeDataBlock(buf).get(0)) {
+                        ZoneRouterProduceRequest zoneRouterProduceRequest = ZoneRouterPackReader.decodeDataBlock(buf).get(0);
+                        try {
                             return append0(req.channelOffset, zoneRouterProduceRequest, false);
                         } finally {
                             buf.release();
@@ -168,11 +171,8 @@ public class RouterInV2 implements NonBlockingLocalRouterHandler {
         ZoneRouterProduceRequest zoneRouterProduceRequest
     ) {
         CompletableFuture<AutomqZoneRouterResponseData.Response> cf = new CompletableFuture<>();
-        appendEventLoops[Math.abs(channelOffset.orderHint() % appendEventLoops.length)].execute(() -> {
-            try (zoneRouterProduceRequest) {
-                FutureUtil.propagate(append0(channelOffset, zoneRouterProduceRequest, true), cf);
-            }
-        });
+        appendEventLoops[Math.abs(channelOffset.orderHint() % appendEventLoops.length)].execute(() ->
+            FutureUtil.propagate(append0(channelOffset, zoneRouterProduceRequest, true), cf));
         return cf;
     }
 
@@ -192,11 +192,14 @@ public class RouterInV2 implements NonBlockingLocalRouterHandler {
         short apiVersion = zoneRouterProduceRequest.apiVersion();
         CompletableFuture<AutomqZoneRouterResponseData.Response> cf = new CompletableFuture<>();
         RouterInProduceHandler handler = local ? localAppendHandler : routerInProduceHandler;
+        // We should release the request after append completed.
+        cf.whenComplete((resp, ex) -> FutureUtil.suppress(zoneRouterProduceRequest::close, LOGGER));
         handler.handleProduceAppend(
             ProduceRequestArgs.builder()
                 .clientId(buildClientId(realEntriesPerPartition))
                 .timeout(data.timeoutMs())
-                .requiredAcks(data.acks())
+                // The CommittedEpochManager requires the data to be persisted prior to bumping the committed epoch.
+                .requiredAcks((short) -1)
                 .internalTopicsAllowed(flag.internalTopicsAllowed())
                 .transactionId(data.transactionalId())
                 .entriesPerPartition(realEntriesPerPartition)

@@ -425,7 +425,7 @@ public class ConsumerService implements AutoCloseable {
                         callback.messageReceived(topicPartition);
                     }
                     stats.messageReceived(numMessages, bytes, sendTimeNanos);
-//                    bucket.consume(records.count());
+                    bucket.consume(records.count());
                 } catch (InterruptException | InterruptedException e) {
                     // ignore, as we are closing
                 } catch (Exception e) {
